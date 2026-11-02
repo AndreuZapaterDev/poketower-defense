@@ -1,0 +1,75 @@
+import Phaser from 'phaser';
+import {
+  ICON_FRAME,
+  allSpriteKeys,
+  frontAnim,
+  frontKey,
+  frontStrips,
+  iconAnim,
+  iconKey,
+  iconPath,
+} from '../data/sprites';
+import { buildTextures } from '../world/textures';
+
+// Fotogramas por segundo de las animaciones frontales (más bajo = más pausado)
+const FRONT_FRAME_RATE = 10;
+
+export class BootScene extends Phaser.Scene {
+  constructor() {
+    super('Boot');
+  }
+
+  preload(): void {
+    this.drawLoadingBar();
+    for (const key of allSpriteKeys()) {
+      this.load.spritesheet(iconKey(key), iconPath(key), { frameWidth: ICON_FRAME, frameHeight: ICON_FRAME });
+    }
+  }
+
+  create(): void {
+    for (const key of allSpriteKeys()) {
+      this.anims.create({
+        key: iconAnim(key),
+        frames: this.anims.generateFrameNumbers(iconKey(key), { start: 0, end: 1 }),
+        frameRate: 3,
+        repeat: -1,
+      });
+    }
+    this.registerFrontStrips();
+    buildTextures(this);
+    // Atajo de desarrollo: http://localhost:9000/#game salta la pantalla de título
+    this.scene.start(window.location.hash === '#game' ? 'Game' : 'Title');
+  }
+
+  /** Convierte las tiras frontales (cargadas en main.ts) en texturas con fotogramas y animaciones */
+  private registerFrontStrips(): void {
+    for (const [sprite, strip] of frontStrips) {
+      const key = frontKey(sprite);
+      if (this.textures.exists(key)) continue;
+      const texture = this.textures.addCanvas(key, strip.canvas);
+      if (!texture) continue;
+      for (let i = 0; i < strip.count; i++) {
+        texture.add(i, 0, (i % strip.cols) * strip.size, Math.floor(i / strip.cols) * strip.size, strip.size, strip.size);
+      }
+      this.anims.create({
+        key: frontAnim(sprite),
+        frames: Array.from({ length: strip.count }, (_, i) => ({ key, frame: i })),
+        frameRate: FRONT_FRAME_RATE,
+        repeat: -1,
+      });
+    }
+  }
+
+  private drawLoadingBar(): void {
+    const { width, height } = this.scale;
+    const w = 320;
+    const x = (width - w) / 2;
+    const y = height / 2;
+    const g = this.add.graphics();
+    g.fillStyle(0x404858).fillRoundedRect(x - 4, y - 4, w + 8, 20, 6);
+    const bar = this.add.graphics();
+    this.load.on('progress', (p: number) => {
+      bar.clear().fillStyle(0xe04040).fillRoundedRect(x, y, w * p, 12, 4);
+    });
+  }
+}
