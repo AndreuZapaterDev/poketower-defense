@@ -1,8 +1,18 @@
 import Phaser from 'phaser';
 import { audio, type SfxName } from '../audio/Audio';
-import { GAME_H, GAME_W, HP_GROWTH_PER_WAVE, MAP_H, MAP_W, START_LIVES, START_MONEY, TILE } from '../config';
+import { GAME_H, GAME_W, MAP_H, MAP_W, SCALE, TILE } from '../config';
 import { ENEMIES, type EnemyDef } from '../data/enemies';
-import { SPAWN_TILE, isBuildable, tileCenter, tileKey } from '../data/map';
+import {
+  DIFFICULTIES,
+  RouteMap,
+  difficultyById,
+  mapById,
+  mapTextureKey,
+  tileCenter,
+  tileKey,
+  type Difficulty,
+  type DifficultyDef,
+} from '../data/map';
 import { BURN, FLAME_WIDTH, SLOW, SPLASH_RADIUS, TOWERS, type TowerAbility, type TowerDef } from '../data/towers';
 import { TYPE_COLORS, effectiveness } from '../data/types';
 import { battleSprite, feetAnchor } from '../data/sprites';
@@ -16,6 +26,7 @@ import { Button } from '../ui/Button';
 import { DamageNumbers, type DamageKind } from '../ui/DamageNumbers';
 import { MessageBox } from '../ui/MessageBox';
 import { Sidebar } from '../ui/Sidebar';
+import { VolumeSlider } from '../ui/VolumeSlider';
 import { WavePreview } from '../ui/WavePreview';
 import { POKEBALL_CURSOR, caps, drawPanel, textStyle } from '../ui/theme';
 import { addAmbient } from '../world/Ambient';
@@ -26,7 +37,7 @@ interface SpawnEntry {
   def: EnemyDef;
 }
 
-const PROJECTILE_SPEED = 400;
+const PROJECTILE_SPEED = 400 * SCALE;
 const SPEEDS = [1, 2, 3];
 const CRIT_CHANCE = 1 / 16;
 const CRIT_MULT = 1.5;
@@ -42,7 +53,15 @@ const ATTACK_SFX: Record<TowerAbility, SfxName> = {
   flamethrower: 'flame',
 };
 
+export interface GameSceneData {
+  mapId?: string;
+  difficulty?: Difficulty;
+}
+
 export class GameScene extends Phaser.Scene {
+  private map!: RouteMap;
+  private difficultyId: Difficulty = 'easy';
+  private difficulty!: DifficultyDef;
   private money = 0;
   private lives = 0;
   private waveIndex = -1;
@@ -69,16 +88,20 @@ export class GameScene extends Phaser.Scene {
   private selectionRing!: Phaser.GameObjects.Graphics;
   private ghost!: Phaser.GameObjects.Image;
   private tallGrass!: Phaser.GameObjects.Image;
-  private pausePanel!: Phaser.GameObjects.Container;
+  /** Solo existe mientras el juego está en pausa (así sus botones no se pueden pulsar ocultos) */
+  private pausePanel: Phaser.GameObjects.Container | null = null;
 
   constructor() {
     super('Game');
   }
 
-  create(): void {
+  create(data: GameSceneData): void {
     // El estado se reinicia aquí porque scene.restart() reutiliza la misma instancia
-    this.money = START_MONEY;
-    this.lives = START_LIVES;
+    this.map = new RouteMap(mapById(data?.mapId));
+    this.difficultyId = difficultyById(data?.difficulty);
+    this.difficulty = DIFFICULTIES[this.difficultyId];
+    this.money = this.difficulty.startMoney;
+    this.lives = this.difficulty.startLives;
     this.waveIndex = -1;
     this.waveActive = false;
     this.waveTime = 0;
@@ -94,20 +117,21 @@ export class GameScene extends Phaser.Scene {
     this.confirmingReset = false;
 
     this.cameras.main.fadeIn(400, 0, 0, 0);
-    this.add.image(0, 0, 'route-map').setOrigin(0).setDepth(0);
+    this.add.image(0, 0, mapTextureKey(this.map.def.id)).setOrigin(0).setDepth(0);
     // Hierba alta por delante de los enemigos: parece que salen de ella
+    const [spawnCol, spawnRow] = this.map.def.spawn;
     this.tallGrass = this.add
-      .image(SPAWN_TILE[0] * TILE, SPAWN_TILE[1] * TILE, 'tallgrass')
+      .image(spawnCol * TILE, spawnRow * TILE, 'tallgrass')
       .setOrigin(0)
       .setDepth(25);
-    addAmbient(this);
+    addAmbient(this, this.map.def.ponds);
 
     this.rangeGfx = this.add.graphics().setDepth(5);
     this.selectionRing = this.add.graphics().setDepth(9).setVisible(false);
-    this.selectionRing.lineStyle(2, 0xffffff).strokeEllipse(0, 14, 50, 20);
+    this.selectionRing.lineStyle(2, 0xffffff).strokeEllipse(0, 9, 34, 14);
     this.tweens.add({ targets: this.selectionRing, alpha: 0.3, duration: 450, yoyo: true, repeat: -1 });
     this.ghost = this.add.image(0, 0, 'px').setOrigin(0.5, 1).setDepth(15).setAlpha(0.7).setVisible(false);
-    this.pausePanel = this.createPausePanel();
+    this.pausePanel = null;
 
     this.effects = new Effects(this);
     this.damageNumbers = new DamageNumbers(this);
@@ -131,7 +155,7 @@ export class GameScene extends Phaser.Scene {
     audio.setBattle(false);
     audio.startMusic();
 
-    this.showLocation('RUTA 1');
+    this.showLocation(this.map.def.name, this.difficulty.label);
     this.wavePreview.show(1, WAVES[0]);
     this.messages.show('¡Los Pokémon salvajes van hacia el Centro Pokémon! Coloca tus Pokémon y pulsa ¡LUCHAR!');
     this.refreshUi();
@@ -218,11 +242,11 @@ export class GameScene extends Phaser.Scene {
   private spawnEnemies(dt: number): void {
     if (!this.waveActive) return;
     this.waveTime += dt * 1000;
-    const hpMultiplier = 1 + HP_GROWTH_PER_WAVE * this.waveIndex;
+    const hpMultiplier = 1 + this.difficulty.hpGrowth * this.waveIndex;
     const level = 3 + this.waveIndex * 4;
     while (this.spawnQueue.length && this.spawnQueue[0].time <= this.waveTime) {
       const { def } = this.spawnQueue.shift()!;
-      this.enemies.push(new Enemy(this, def, hpMultiplier, def.boss ? level + 15 : level));
+      this.enemies.push(new Enemy(this, def, hpMultiplier, def.boss ? level + 15 : level, this.map.waypoints));
       this.rustleGrass();
       if (def.boss) {
         this.cameras.main.shake(300, 0.006);
@@ -234,7 +258,7 @@ export class GameScene extends Phaser.Scene {
 
   /** La hierba alta se agita cuando sale un Pokémon, como en los juegos */
   private rustleGrass(): void {
-    const baseX = SPAWN_TILE[0] * TILE;
+    const baseX = this.map.def.spawn[0] * TILE;
     this.tweens.killTweensOf(this.tallGrass);
     this.tallGrass.setX(baseX);
     this.tweens.add({
@@ -276,7 +300,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.waveActive || this.spawnQueue.length || this.enemies.length) return;
     this.waveActive = false;
     const completed = this.waveIndex + 1;
-    saveBestWave(completed);
+    saveBestWave(this.map.def.id, this.difficultyId, completed);
     const bonus = 20 + 10 * completed;
     this.money += bonus;
     audio.setBattle(false);
@@ -293,7 +317,7 @@ export class GameScene extends Phaser.Scene {
   /** Pide confirmación antes de reiniciar la partida (pausa el juego mientras tanto) */
   private confirmReset(): void {
     if (this.gameOver) {
-      this.scene.restart();
+      this.restart();
       return;
     }
     if (this.confirmingReset) return;
@@ -319,16 +343,22 @@ export class GameScene extends Phaser.Scene {
       this.paused = wasPaused;
       this.refreshUi();
     };
-    const yes = new Button(this, MAP_W / 2 - 150, y + h - 54, 140, 34, 'SI', () => this.scene.restart(), {
+    const yes = new Button(this, MAP_W / 2 - 150, y + h - 54, 140, 34, 'SI', () => this.restart(), {
       variant: 'red',
     }).setDepth(212);
     const no = new Button(this, MAP_W / 2 + 10, y + h - 54, 140, 34, 'NO', close, { variant: 'blue' }).setDepth(212);
   }
 
+  /** Vuelve a empezar en el mismo mapa y dificultad */
+  private restart(): void {
+    this.scene.restart({ mapId: this.map.def.id, difficulty: this.difficultyId } satisfies GameSceneData);
+  }
+
   private togglePause(): void {
     if (this.gameOver || this.confirmingReset) return;
     this.paused = !this.paused;
-    this.pausePanel.setVisible(this.paused);
+    this.pausePanel?.destroy();
+    this.pausePanel = this.paused ? this.createPausePanel() : null;
     this.refreshUi();
   }
 
@@ -514,7 +544,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private canPlace(col: number, row: number): boolean {
-    return isBuildable(col, row) && !this.towers.has(tileKey(col, row));
+    return this.map.isBuildable(col, row) && !this.towers.has(tileKey(col, row));
   }
 
   private onPointerMove(pointer: Phaser.Input.Pointer): void {
@@ -536,11 +566,12 @@ export class GameScene extends Phaser.Scene {
     this.drawRange(pos.x, pos.y, this.placing.stages[0].range, valid ? 0xffffff : 0xff3b30);
   }
 
-  private onPointerDown(pointer: Phaser.Input.Pointer): void {
+  private onPointerDown(pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]): void {
     // Por si se entró directamente con #game sin pasar por el título
     audio.unlock();
     audio.startMusic();
-    if (this.gameOver || pointer.x >= MAP_W) return;
+    // Los clics en paneles (pausa, confirmaciones) no llegan al mapa de debajo
+    if (this.gameOver || pointer.x >= MAP_W || currentlyOver.length > 0) return;
     if (pointer.rightButtonDown()) {
       this.cancelPlacing();
       this.select(null);
@@ -742,25 +773,34 @@ export class GameScene extends Phaser.Scene {
     );
   }
 
+  /** Panel de pausa con los volúmenes de música y efectos */
   private createPausePanel(): Phaser.GameObjects.Container {
-    const w = 260;
-    const h = 76;
+    const barWidth = 200;
+    const labelW = 104;
+    const pad = 24;
+    const w = pad * 2 + labelW + VolumeSlider.width(barWidth);
+    const h = 196;
     const g = drawPanel(this.add.graphics(), 0, 0, w, h);
-    const title = this.add.text(w / 2, 26, 'PAUSA', textStyle(24)).setOrigin(0.5);
-    const hint = this.add.text(w / 2, 56, 'Pulsa P para seguir', textStyle(8)).setOrigin(0.5);
-    return this.add
-      .container((MAP_W - w) / 2, (MAP_H - h) / 2 - 40, [g, title, hint])
-      .setDepth(170)
-      .setVisible(false);
+    const title = this.add.text(w / 2, 30, 'PAUSA', textStyle(24)).setOrigin(0.5);
+    const rows = (['music', 'sfx'] as const).flatMap((channel, i) => {
+      const y = 62 + i * 52;
+      const label = this.add
+        .text(pad, y + VolumeSlider.height / 2, channel === 'music' ? 'MUSICA' : 'EFECTOS', textStyle(8))
+        .setOrigin(0, 0.5);
+      return [label, new VolumeSlider(this, pad + labelW, y, channel, { barWidth })];
+    });
+    const hint = this.add.text(w / 2, h - 24, 'Pulsa P para seguir', textStyle(8)).setOrigin(0.5);
+    return this.add.container((MAP_W - w) / 2, (MAP_H - h) / 2 - 30, [g, title, ...rows, hint]).setDepth(170);
   }
 
   /** Cartel con el nombre de la zona que baja desde arriba, como al entrar en una ruta */
-  private showLocation(name: string): void {
+  private showLocation(name: string, subtitle: string): void {
     const w = 180;
-    const h = 40;
+    const h = 52;
     const g = drawPanel(this.add.graphics(), 0, 0, w, h);
-    const text = this.add.text(w / 2, h / 2, name, textStyle(16)).setOrigin(0.5);
-    const sign = this.add.container(12, -h - 10, [g, text]).setDepth(160);
+    const text = this.add.text(w / 2, 20, name, textStyle(16)).setOrigin(0.5);
+    const sub = this.add.text(w / 2, 39, subtitle, textStyle(8)).setOrigin(0.5);
+    const sign = this.add.container(12, -h - 10, [g, text, sub]).setDepth(160);
     this.tweens.chain({
       targets: sign,
       tweens: [
@@ -775,7 +815,8 @@ export class GameScene extends Phaser.Scene {
     this.gameOver = true;
     this.placing = null;
     this.ghost.setVisible(false);
-    this.pausePanel.setVisible(false);
+    this.pausePanel?.destroy();
+    this.pausePanel = null;
     this.wavePreview.hide();
     this.refreshUi();
     audio.stopMusic();
@@ -802,10 +843,10 @@ export class GameScene extends Phaser.Scene {
       .setDepth(202);
     this.add.image(W / 2, py + 120, 'pokeball').setScale(2).setDepth(202);
 
-    new Button(this, W / 2 - 190, py + ph - 56, 180, 36, 'VOLVER A JUGAR', () => this.scene.restart(), {
+    new Button(this, W / 2 - 190, py + ph - 56, 180, 36, 'VOLVER A JUGAR', () => this.restart(), {
       variant: 'red',
     }).setDepth(202);
-    new Button(this, W / 2 + 10, py + ph - 56, 180, 36, 'MENU', () => this.scene.start('Title'), {
+    new Button(this, W / 2 + 10, py + ph - 56, 180, 36, 'MAPAS', () => this.scene.start('MapSelect'), {
       variant: 'blue',
     }).setDepth(202);
   }

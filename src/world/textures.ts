@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { COLS, MAP_H, MAP_W, ROWS, TILE } from '../config';
-import { PATH_TILES, POKECENTER, POND, SIGN, TALL_GRASS, TREES, isBuildable, tileKey } from '../data/map';
+import { MAPS, RouteMap, mapTextureKey, type MapDef, type Tile } from '../data/map';
 
 type G = Phaser.GameObjects.Graphics;
 
@@ -90,7 +90,14 @@ export function buildTextures(scene: Phaser.Scene): void {
   make(scene, 'icon-pause', 14, 14, (g) => g.fillStyle(0xffffff).fillRect(3, 2, 3, 10).fillRect(8, 2, 3, 10));
   make(scene, 'icon-play', 14, 14, (g) => g.fillStyle(0xffffff).fillTriangle(3, 1, 3, 13, 12, 7));
   make(scene, 'tallgrass', TILE, TILE, (g) => drawTallGrass(g, 0, 0, false));
-  make(scene, 'route-map', MAP_W, MAP_H, drawMap);
+  // Fondo de los menús: dos siluetas de Poké Ball por casilla, en diagonal
+  make(scene, 'menu-pattern', 64, 64, (g) => {
+    for (const [cx, cy] of [[16, 16], [48, 48]]) {
+      g.lineStyle(3, 0xffffff).strokeCircle(cx, cy, 11);
+      g.fillStyle(0xffffff).fillRect(cx - 11, cy - 1.5, 22, 3).fillCircle(cx, cy, 4);
+    }
+  });
+  for (const def of MAPS) make(scene, mapTextureKey(def.id), MAP_W, MAP_H, (g) => drawMap(g, def));
 }
 
 function drawPokeball(g: G): void {
@@ -106,9 +113,11 @@ function drawPokeball(g: G): void {
 
 // ------------------------------------------------------------------ mapa
 
-function drawMap(g: G): void {
-  const rng = new Phaser.Math.RandomDataGenerator(['poketower-ruta-1']);
-  const isPath = (c: number, r: number) => PATH_TILES.has(tileKey(c, r));
+function drawMap(g: G, def: MapDef): void {
+  const map = new RouteMap(def);
+  // Semilla fija por mapa: los detalles al azar salen siempre iguales
+  const rng = new Phaser.Math.RandomDataGenerator([`poketower-${def.id}`]);
+  const isPath = (c: number, r: number) => map.isPath(c, r);
 
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
@@ -120,15 +129,15 @@ function drawMap(g: G): void {
   // Flores en algunas casillas libres
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
-      if (isBuildable(c, r) && rng.frac() < 0.14) drawFlowers(g, c * TILE, r * TILE, rng);
+      if (map.isBuildable(c, r) && rng.frac() < 0.14) drawFlowers(g, c * TILE, r * TILE, rng);
     }
   }
 
-  for (const [c, r] of TALL_GRASS) drawTallGrass(g, c * TILE, r * TILE, true);
-  drawPond(g);
-  for (const [c, r] of TREES) drawTree(g, c * TILE, r * TILE);
-  drawSign(g, SIGN[0] * TILE, SIGN[1] * TILE);
-  drawPokeCenter(g);
+  for (const [c, r] of def.tallGrass) drawTallGrass(g, c * TILE, r * TILE, true);
+  for (const pond of def.ponds) drawPond(g, pond);
+  for (const [c, r] of def.trees) drawTree(g, c * TILE, r * TILE);
+  drawSign(g, def.sign[0] * TILE, def.sign[1] * TILE);
+  drawPokeCenter(g, map.pokecenter);
 }
 
 function drawGrassTile(g: G, x: number, y: number, odd: boolean, rng: Phaser.Math.RandomDataGenerator): void {
@@ -180,48 +189,46 @@ function drawFlowers(g: G, x: number, y: number, rng: Phaser.Math.RandomDataGene
 function drawTallGrass(g: G, x: number, y: number, withBase: boolean): void {
   if (withBase) g.fillStyle(0x70b858).fillRect(x, y, TILE, TILE);
   for (let row = 0; row < 3; row++) {
-    const by = y + 18 + row * 10;
-    for (let i = 0; i < 6; i++) {
+    const by = y + 10 + row * 7;
+    for (let i = 0; i < 4; i++) {
       const bx = x + i * 8 + (row % 2) * 4;
-      g.fillStyle(0x306830).fillTriangle(bx, by + 12, bx + 4, by - 2, bx + 8, by + 12);
-      g.fillStyle(0x48a048).fillTriangle(bx + 1, by + 12, bx + 4, by + 1, bx + 7, by + 12);
-      g.fillStyle(0x78c860).fillRect(bx + 3, by + 3, 2, 4);
+      g.fillStyle(0x306830).fillTriangle(bx, by + 8, bx + 4, by - 2, bx + 8, by + 8);
+      g.fillStyle(0x48a048).fillTriangle(bx + 1, by + 8, bx + 4, by + 1, bx + 7, by + 8);
+      g.fillStyle(0x78c860).fillRect(bx + 3, by + 2, 2, 3);
     }
   }
 }
 
 function drawTree(g: G, x: number, y: number): void {
   const cx = x + TILE / 2;
-  g.fillStyle(0x000000, 0.18).fillEllipse(cx, y + TILE - 6, 36, 10);
-  g.fillStyle(0x583818).fillRect(cx - 5, y + 30, 10, 14);
-  g.fillStyle(0x806030).fillRect(cx - 3, y + 30, 4, 14);
-  g.fillStyle(0x204818).fillCircle(cx, y + 20, 20);
-  g.fillStyle(0x388030).fillCircle(cx, y + 20, 18);
-  g.fillStyle(0x2c6828).fillCircle(cx + 6, y + 26, 10);
-  g.fillStyle(0x58a840).fillCircle(cx - 5, y + 14, 9);
-  g.fillStyle(0x80c860).fillRect(cx - 9, y + 9, 4, 3);
+  g.fillStyle(0x000000, 0.18).fillEllipse(cx, y + TILE - 4, 24, 7);
+  g.fillStyle(0x583818).fillRect(cx - 3, y + 20, 7, 9);
+  g.fillStyle(0x806030).fillRect(cx - 2, y + 20, 3, 9);
+  g.fillStyle(0x204818).fillCircle(cx, y + 13, 13);
+  g.fillStyle(0x388030).fillCircle(cx, y + 13, 12);
+  g.fillStyle(0x2c6828).fillCircle(cx + 4, y + 17, 7);
+  g.fillStyle(0x58a840).fillCircle(cx - 3, y + 9, 6);
+  g.fillStyle(0x80c860).fillRect(cx - 6, y + 6, 3, 2);
 }
 
 function drawSign(g: G, x: number, y: number): void {
   const cx = x + TILE / 2;
-  g.fillStyle(0x000000, 0.18).fillEllipse(cx, y + 42, 30, 8);
+  g.fillStyle(0x000000, 0.18).fillEllipse(cx, y + 28, 20, 6);
   // Postes
-  g.fillStyle(0x503018).fillRect(cx - 12, y + 26, 5, 16).fillRect(cx + 7, y + 26, 5, 16);
+  g.fillStyle(0x503018).fillRect(cx - 8, y + 17, 3, 11).fillRect(cx + 5, y + 17, 3, 11);
   // Tablero
-  g.fillStyle(0x503018).fillRect(cx - 18, y + 8, 36, 22);
-  g.fillStyle(0xb88848).fillRect(cx - 16, y + 10, 32, 18);
-  g.fillStyle(0xd0a060).fillRect(cx - 16, y + 10, 32, 3);
+  g.fillStyle(0x503018).fillRect(cx - 12, y + 5, 24, 15);
+  g.fillStyle(0xb88848).fillRect(cx - 11, y + 6, 22, 13);
+  g.fillStyle(0xd0a060).fillRect(cx - 11, y + 6, 22, 2);
   // Letras simuladas
-  g.fillStyle(0x684020).fillRect(cx - 11, y + 16, 22, 2).fillRect(cx - 11, y + 21, 15, 2);
+  g.fillStyle(0x684020).fillRect(cx - 7, y + 10, 14, 2).fillRect(cx - 7, y + 14, 10, 2);
 }
 
-function drawPond(g: G): void {
-  const xs = POND.map(([c]) => c * TILE);
-  const ys = POND.map(([, r]) => r * TILE);
-  const x = Math.min(...xs);
-  const y = Math.min(...ys);
-  const w = Math.max(...xs) + TILE - x;
-  const h = Math.max(...ys) + TILE - y;
+function drawPond(g: G, [col, row]: Tile): void {
+  const x = col * TILE;
+  const y = row * TILE;
+  const w = TILE * 3;
+  const h = TILE * 3;
   g.fillStyle(0xd8c890).fillRoundedRect(x + 2, y + 2, w - 4, h - 4, 18);
   g.fillStyle(0x3870c0).fillRoundedRect(x + 6, y + 6, w - 12, h - 12, 14);
   g.fillStyle(0x58a0e8).fillRoundedRect(x + 8, y + 9, w - 16, h - 17, 12);
@@ -233,8 +240,7 @@ function drawPond(g: G): void {
   g.fillStyle(0xf890b0).fillRect(x + 63, y + 64, 3, 3);
 }
 
-function drawPokeCenter(g: G): void {
-  const { x, y, w, h } = POKECENTER;
+function drawPokeCenter(g: G, { x, y, w, h }: RouteMap['pokecenter']): void {
   const cx = x + w / 2;
   const wallTop = y + 34;
 

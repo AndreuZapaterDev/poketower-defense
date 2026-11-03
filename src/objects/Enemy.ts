@@ -1,8 +1,16 @@
 import Phaser from 'phaser';
 import { MAP_H } from '../config';
 import type { EnemyDef } from '../data/enemies';
-import { WAYPOINTS } from '../data/map';
-import { battleSprite, feetAnchor, type BattleSprite } from '../data/sprites';
+import {
+  WALK_FRAMES,
+  battleSprite,
+  feetAnchor,
+  walkAnim,
+  walkKey,
+  walkSheets,
+  type BattleSprite,
+  type WalkDir,
+} from '../data/sprites';
 import { hpColor } from '../ui/BossBar';
 import type { Tower } from './Tower';
 
@@ -17,7 +25,7 @@ const DRAIN_DELAY = 0.3;
 const DRAIN_SPEED = 1.2; // fracción de la vida máxima por segundo
 const HP_BAR_DEPTH = 36;
 /** Altura de los pies respecto al centro del camino */
-const FEET_Y = 10;
+const FEET_Y = 7;
 
 export class Enemy extends Phaser.GameObjects.Container {
   readonly def: EnemyDef;
@@ -53,9 +61,14 @@ export class Enemy extends Phaser.GameObjects.Container {
   private readonly displaySize: number;
   private readonly look: BattleSprite;
   private readonly spriteScale: number;
+  /** Tiene hoja de andar (una animación por dirección) en vez de la animación frontal */
+  private readonly walking: boolean;
+  private walkDir: WalkDir | null = null;
+  private readonly waypoints: Phaser.Math.Vector2[];
 
-  constructor(scene: Phaser.Scene, def: EnemyDef, hpMultiplier: number, level: number) {
-    super(scene, WAYPOINTS[0].x, WAYPOINTS[0].y);
+  constructor(scene: Phaser.Scene, def: EnemyDef, hpMultiplier: number, level: number, waypoints: Phaser.Math.Vector2[]) {
+    super(scene, waypoints[0].x, waypoints[0].y);
+    this.waypoints = waypoints;
     this.def = def;
     this.level = level;
     this.maxHp = Math.round(def.hp * hpMultiplier);
@@ -63,13 +76,32 @@ export class Enemy extends Phaser.GameObjects.Container {
     this.trailHp = this.maxHp;
 
     // El sprite se apoya por los pies un poco por debajo del centro del camino
-    const look = battleSprite(def.sprite);
-    // Se escala por la parte visible, sin el margen transparente de debajo de los pies
-    const scale = def.size / Math.max(1, look.size - look.bottomPad);
+    const walk = walkSheets.get(def.sprite);
+    this.walking = !!walk;
+    let look: BattleSprite;
+    let scale: number;
+    if (walk) {
+      // Escala entera para que el pixel art no se deforme
+      const visible = Math.max(1, walk.size - walk.topPad - walk.bottomPad);
+      scale = Math.max(1, Math.round(def.size / visible));
+      look = {
+        texture: walkKey(def.sprite),
+        anim: walkAnim(def.sprite, 'right'),
+        size: walk.size,
+        frames: WALK_FRAMES,
+        bottomPad: walk.bottomPad,
+        feetX: 0,
+      };
+      this.displaySize = visible * scale;
+    } else {
+      look = battleSprite(def.sprite);
+      // Se escala por la parte visible, sin el margen transparente de debajo de los pies
+      scale = def.size / Math.max(1, look.size - look.bottomPad);
+      this.displaySize = def.size;
+    }
     this.look = look;
     this.spriteScale = scale;
-    this.displaySize = def.size;
-    const width = def.size * 0.8;
+    const width = this.displaySize * 0.8;
     const parts: Phaser.GameObjects.GameObject[] = [];
     if (def.boss) {
       const aura = scene.add.ellipse(0, FEET_Y, width * 1.1, width * 0.4, 0xff3030, 0.35);
@@ -79,13 +111,14 @@ export class Enemy extends Phaser.GameObjects.Container {
     parts.push(scene.add.image(0, FEET_Y, 'shadow').setScale(width / 32, width / 64).setAlpha(0.3));
     const pos = feetAnchor(look, scale, false, FEET_Y + 2);
     this.sprite = scene.add.sprite(pos.x, pos.y, look.texture).setOrigin(0.5, 1).setScale(scale);
-    this.sprite.play({ key: look.anim, startFrame: Phaser.Math.Between(0, look.frames - 1) });
+    if (this.walking) this.face(waypoints[1].x - waypoints[0].x, waypoints[1].y - waypoints[0].y);
+    else this.sprite.play({ key: look.anim, startFrame: Phaser.Math.Between(0, look.frames - 1) });
     parts.push(this.sprite);
     this.add(parts);
 
     // La barra va en su propia capa para que no la tapen otros Pokémon
-    this.barWidth = Math.round(Phaser.Math.Clamp(def.size * 0.75, 30, 60));
-    this.barOffsetY = Math.round(FEET_Y - def.size - 6);
+    this.barWidth = Math.round(Phaser.Math.Clamp(this.displaySize * 0.75, 22, 44));
+    this.barOffsetY = Math.round(FEET_Y - this.displaySize - 6);
     this.hpBar = scene.add.graphics().setDepth(HP_BAR_DEPTH);
 
     scene.add.existing(this);
@@ -203,13 +236,15 @@ export class Enemy extends Phaser.GameObjects.Container {
 
   private advance(distance: number): void {
     let remaining = distance;
-    while (remaining > 0 && this.nextWaypoint < WAYPOINTS.length) {
-      const target = WAYPOINTS[this.nextWaypoint];
+    while (remaining > 0 && this.nextWaypoint < this.waypoints.length) {
+      const target = this.waypoints[this.nextWaypoint];
       const dx = target.x - this.x;
       const dy = target.y - this.y;
       const dist = Math.hypot(dx, dy);
-      // Los sprites miran a la izquierda: se voltean al ir a la derecha
-      if (Math.abs(dx) > 0.5 && this.sprite.flipX !== dx > 0) {
+      if (this.walking) {
+        if (dist > 0.5) this.face(dx, dy);
+      } else if (Math.abs(dx) > 0.5 && this.sprite.flipX !== dx > 0) {
+        // Los sprites frontales miran a la izquierda: se voltean al ir a la derecha
         this.sprite.setFlipX(dx > 0);
         this.sprite.x = this.anchorX;
       }
@@ -225,7 +260,15 @@ export class Enemy extends Phaser.GameObjects.Container {
         remaining = 0;
       }
     }
-    if (this.nextWaypoint >= WAYPOINTS.length) this.reachedEnd = true;
+    if (this.nextWaypoint >= this.waypoints.length) this.reachedEnd = true;
+  }
+
+  /** Pone la animación de andar de la dirección en que se mueve */
+  private face(dx: number, dy: number): void {
+    const dir: WalkDir = Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : dy > 0 ? 'down' : 'up';
+    if (dir === this.walkDir) return;
+    this.walkDir = dir;
+    this.sprite.play(walkAnim(this.def.sprite, dir));
   }
 
   private updateHpBar(dt: number): void {

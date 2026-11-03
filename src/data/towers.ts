@@ -1,3 +1,4 @@
+import { SCALE } from '../config';
 import type { PokeType } from './types';
 
 export type TowerAbility = 'burn' | 'splash' | 'slow' | 'melee' | 'flamethrower';
@@ -25,8 +26,8 @@ export interface TowerDef {
 
 export const BURN = { ratio: 0.4, duration: 3 };
 export const SLOW = { factor: 0.5, duration: 1.5 };
-export const SPLASH_RADIUS = 50;
-export const FLAME_WIDTH = 14;
+export const SPLASH_RADIUS = 50 * SCALE;
+export const FLAME_WIDTH = 14 * SCALE;
 
 const stage = (
   name: string,
@@ -35,7 +36,7 @@ const stage = (
   range: number,
   fireRate: number,
   cost: number,
-): TowerStage => ({ name, level, sprite: name.toLowerCase(), damage, range, fireRate, cost });
+): TowerStage => ({ name, level, sprite: name.toLowerCase(), damage, range: Math.round(range * SCALE), fireRate, cost });
 
 export const TOWERS: TowerDef[] = [
   {

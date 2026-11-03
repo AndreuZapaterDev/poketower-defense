@@ -1,14 +1,14 @@
 import Phaser from 'phaser';
-import { SELL_RATIO, TILE } from '../config';
+import { SCALE, SELL_RATIO, TILE } from '../config';
 import { battleSprite, feetAnchor, type BattleSprite } from '../data/sprites';
 import type { TowerDef, TowerStage } from '../data/towers';
 import { TYPE_COLORS } from '../data/types';
 import { darken } from '../ui/theme';
 
 /** Altura de los pies respecto al centro de la casilla (sobre la plataforma) */
-export const TOWER_FEET_Y = 15;
+export const TOWER_FEET_Y = 15 * SCALE;
 /** Tamaño máximo con que se dibuja cada fase: los evolucionados se ven más grandes */
-const STAGE_MAX_SIZE = [50, 64, 78];
+const STAGE_MAX_SIZE = [50, 64, 78].map((size) => size * SCALE);
 /** Daño extra por cada nivel ganado con experiencia por encima del nivel de su fase */
 const LEVEL_BONUS = 0.03;
 const MAX_LEVEL = 100;
@@ -62,9 +62,9 @@ export class Tower extends Phaser.GameObjects.Container {
     // Plataforma de combate del color del tipo
     const color = TYPE_COLORS[def.type];
     const platform = scene.add.graphics();
-    platform.fillStyle(darken(color, 35)).fillEllipse(0, 14, 44, 16);
-    platform.fillStyle(color).fillEllipse(0, 13, 40, 12);
-    platform.fillStyle(0xffffff, 0.35).fillEllipse(-4, 11, 24, 5);
+    platform.fillStyle(darken(color, 35)).fillEllipse(0, 9, 30, 11);
+    platform.fillStyle(color).fillEllipse(0, 9, 27, 8);
+    platform.fillStyle(0xffffff, 0.35).fillEllipse(-3, 7, 16, 3);
 
     this.sprite = scene.add.sprite(0, TOWER_FEET_Y, battleSprite(this.stats.sprite).texture).setOrigin(0.5, 1);
     this.showStage();

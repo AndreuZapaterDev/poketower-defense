@@ -24,6 +24,8 @@ export interface ButtonOptions {
   fontSize?: number;
   /** Textura de icono en lugar de texto */
   icon?: string;
+  /** Se llama al pasar el ratón por encima */
+  onHover?: () => void;
 }
 
 export class Button extends Phaser.GameObjects.Container {
@@ -59,7 +61,10 @@ export class Button extends Phaser.GameObjects.Container {
     this.icon = opts.icon ? scene.add.image(w / 2, h / 2 - 1, opts.icon) : null;
     const zone = scene.add.zone(0, 0, w, h).setOrigin(0).setInteractive({ useHandCursor: true });
     zone
-      .on('pointerover', () => this.setHovered(true))
+      .on('pointerover', () => {
+        this.setHovered(true);
+        opts.onHover?.();
+      })
       .on('pointerout', () => this.setHovered(false))
       .on('pointerdown', () => {
         if (!this.enabled) {

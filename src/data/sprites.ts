@@ -105,6 +105,68 @@ export async function loadFrontStrips(): Promise<void> {
   await Promise.all(allSpriteKeys().map(loadStrip));
 }
 
+// ------------------------------------------------------------------ animaciones de andar
+
+// Hojas opcionales para los enemigos (public/assets/running/<SPRITE>.png): cuadrícula de 4x4
+// fotogramas cuadrados, una fila por dirección en el orden de WALK_DIRS
+export type WalkDir = 'down' | 'left' | 'right' | 'up';
+export const WALK_DIRS: WalkDir[] = ['down', 'left', 'right', 'up'];
+export const WALK_FRAMES = 4;
+
+export const walkPath = (sprite: string) => `assets/running/${sprite.toUpperCase()}.png`;
+export const walkKey = (sprite: string) => `walk-${sprite}`;
+export const walkAnim = (sprite: string, dir: WalkDir) => `${sprite}-walk-${dir}`;
+
+export interface WalkSheet {
+  image: HTMLImageElement;
+  /** Lado del fotograma cuadrado, en píxeles */
+  size: number;
+  /** Filas transparentes por encima y por debajo del Pokémon (en el conjunto de fotogramas) */
+  topPad: number;
+  bottomPad: number;
+}
+
+/** Hojas de andar ya cargadas, por clave de sprite */
+export const walkSheets = new Map<string, WalkSheet>();
+
+/** Filas vacías por arriba y por abajo, mirando todos los fotogramas de la cuadrícula */
+function measurePadding(img: HTMLImageElement, size: number): { topPad: number; bottomPad: number } {
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(img, 0, 0);
+  const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  let minY = size;
+  let maxY = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (data[(y * width + x) * 4 + 3] <= 32) continue;
+      minY = Math.min(minY, y % size);
+      maxY = Math.max(maxY, y % size);
+    }
+  }
+  if (maxY < 0) return { topPad: 0, bottomPad: 0 };
+  return { topPad: minY, bottomPad: size - 1 - maxY };
+}
+
+async function loadWalkSheet(sprite: string): Promise<void> {
+  const img = new Image();
+  img.src = walkPath(sprite);
+  try {
+    await img.decode();
+  } catch {
+    return; // sin hoja de andar: se usará la animación frontal
+  }
+  const size = img.width / WALK_FRAMES;
+  walkSheets.set(sprite, { image: img, size, ...measurePadding(img, size) });
+}
+
+/** Carga las hojas de andar de los enemigos antes de arrancar Phaser */
+export async function loadWalkSheets(): Promise<void> {
+  await Promise.all([...new Set(Object.values(ENEMIES).map((e) => e.sprite))].map(loadWalkSheet));
+}
+
 // ------------------------------------------------------------------ uso en la partida
 
 export interface BattleSprite {

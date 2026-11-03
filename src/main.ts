@@ -1,9 +1,12 @@
 import '@fontsource/press-start-2p';
 import Phaser from 'phaser';
 import { GAME_H, GAME_W } from './config';
-import { loadFrontStrips } from './data/sprites';
+import { loadFrontStrips, loadWalkSheets } from './data/sprites';
 import { BootScene } from './scenes/BootScene';
 import { GameScene } from './scenes/GameScene';
+import { MainMenuScene } from './scenes/MainMenuScene';
+import { MapSelectScene } from './scenes/MapSelectScene';
+import { OptionsScene } from './scenes/OptionsScene';
 import { TitleScene } from './scenes/TitleScene';
 
 const config: Phaser.Types.Core.GameConfig = {
@@ -20,12 +23,17 @@ const config: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [BootScene, TitleScene, GameScene],
+  scene: [BootScene, TitleScene, MainMenuScene, MapSelectScene, OptionsScene, GameScene],
 };
 
 // Phaser dibuja el texto en canvas: la fuente tiene que estar cargada antes de arrancar.
 // Las animaciones frontales se cargan aquí para recolocar las tiras más anchas (ver sprites.ts).
-Promise.all([document.fonts.load('16px "Press Start 2P"').catch(() => undefined), loadFrontStrips()])
+// Las de andar, para saber antes de crear los enemigos qué Pokémon tienen hoja.
+Promise.all([
+  document.fonts.load('16px "Press Start 2P"').catch(() => undefined),
+  loadFrontStrips(),
+  loadWalkSheets(),
+])
   .then(() => {
     const game = new Phaser.Game(config);
     // Solo en desarrollo: permite inspeccionar el juego desde la consola (window.game)

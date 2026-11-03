@@ -1,6 +1,8 @@
 import Phaser from 'phaser';
 import {
   ICON_FRAME,
+  WALK_DIRS,
+  WALK_FRAMES,
   allSpriteKeys,
   frontAnim,
   frontKey,
@@ -8,11 +10,17 @@ import {
   iconAnim,
   iconKey,
   iconPath,
+  walkAnim,
+  walkKey,
+  walkSheets,
 } from '../data/sprites';
+import { difficultyById } from '../data/map';
 import { buildTextures } from '../world/textures';
+import type { GameSceneData } from './GameScene';
 
 // Fotogramas por segundo de las animaciones frontales (más bajo = más pausado)
 const FRONT_FRAME_RATE = 10;
+const WALK_FRAME_RATE = 8;
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -36,9 +44,13 @@ export class BootScene extends Phaser.Scene {
       });
     }
     this.registerFrontStrips();
+    this.registerWalkSheets();
     buildTextures(this);
-    // Atajo de desarrollo: http://localhost:9000/#game salta la pantalla de título
-    this.scene.start(window.location.hash === '#game' ? 'Game' : 'Title');
+    // Atajo de desarrollo: http://localhost:9000/#game (o #game=ruta2:hard) salta los menús
+    const [hash, args = ''] = window.location.hash.split('=');
+    const [mapId, difficulty] = args.split(':');
+    if (hash === '#game') this.scene.start('Game', { mapId, difficulty: difficultyById(difficulty) } satisfies GameSceneData);
+    else this.scene.start('Title');
   }
 
   /** Convierte las tiras frontales (cargadas en main.ts) en texturas con fotogramas y animaciones */
@@ -56,6 +68,23 @@ export class BootScene extends Phaser.Scene {
         frames: Array.from({ length: strip.count }, (_, i) => ({ key, frame: i })),
         frameRate: FRONT_FRAME_RATE,
         repeat: -1,
+      });
+    }
+  }
+
+  /** Convierte las hojas de andar (cargadas en main.ts) en texturas con una animación por dirección */
+  private registerWalkSheets(): void {
+    for (const [sprite, sheet] of walkSheets) {
+      const key = walkKey(sprite);
+      if (this.textures.exists(key)) continue;
+      this.textures.addSpriteSheet(key, sheet.image, { frameWidth: sheet.size, frameHeight: sheet.size });
+      WALK_DIRS.forEach((dir, row) => {
+        this.anims.create({
+          key: walkAnim(sprite, dir),
+          frames: this.anims.generateFrameNumbers(key, { start: row * WALK_FRAMES, end: row * WALK_FRAMES + WALK_FRAMES - 1 }),
+          frameRate: WALK_FRAME_RATE,
+          repeat: -1,
+        });
       });
     }
   }

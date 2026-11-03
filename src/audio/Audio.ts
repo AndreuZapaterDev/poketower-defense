@@ -1,4 +1,4 @@
-import { loadMuted, saveMuted } from '../save';
+import { loadMuted, loadVolume, saveMuted, saveVolume, type VolumeChannel } from '../save';
 
 // Sonido chiptune generado con Web Audio: no hace falta ningún fichero de audio.
 
@@ -66,6 +66,8 @@ const MELODY = [
 const BASS = ['C3', 'G2', 'A2', 'F2', 'C3', 'G2', 'F2', 'G2'];
 const CALM_TEMPO = 116;
 const BATTLE_TEMPO = 148;
+/** Ganancia de cada bus con el volumen al 100% */
+const BUS_GAIN: Record<VolumeChannel, number> = { music: 0.22, sfx: 0.35 };
 
 class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -74,6 +76,7 @@ class AudioEngine {
   private musicBus!: GainNode;
   private noiseBuffer!: AudioBuffer;
   private muted = loadMuted();
+  private volumes: Record<VolumeChannel, number> = { music: loadVolume('music'), sfx: loadVolume('sfx') };
   private lastPlayed = new Map<SfxName, number>();
   private musicTimer: number | null = null;
   private step = 0;
@@ -97,10 +100,10 @@ class AudioEngine {
       this.master.gain.value = this.muted ? 0 : 0.6;
       this.master.connect(ctx.destination);
       this.sfxBus = ctx.createGain();
-      this.sfxBus.gain.value = 0.35;
+      this.sfxBus.gain.value = BUS_GAIN.sfx * this.volumes.sfx;
       this.sfxBus.connect(this.master);
       this.musicBus = ctx.createGain();
-      this.musicBus.gain.value = 0.22;
+      this.musicBus.gain.value = BUS_GAIN.music * this.volumes.music;
       this.musicBus.connect(this.master);
 
       this.noiseBuffer = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
@@ -117,10 +120,24 @@ class AudioEngine {
     return this.muted;
   }
 
+  /** Volumen de la música o de los efectos, entre 0 y 1 */
+  getVolume(channel: VolumeChannel): number {
+    return this.volumes[channel];
+  }
+
+  setVolume(channel: VolumeChannel, volume: number): void {
+    const value = Math.min(1, Math.max(0, volume));
+    this.volumes[channel] = value;
+    saveVolume(channel, value);
+    if (!this.ctx) return;
+    const bus = channel === 'music' ? this.musicBus : this.sfxBus;
+    bus.gain.setTargetAtTime(BUS_GAIN[channel] * value, this.ctx.currentTime, 0.05);
+  }
+
   // ------------------------------------------------------------ efectos
 
   play(name: SfxName): void {
-    if (!this.ctx || this.muted) return;
+    if (!this.ctx || this.muted || this.volumes.sfx === 0) return;
     const now = performance.now();
     const gap = THROTTLE[name];
     if (gap && now - (this.lastPlayed.get(name) ?? 0) < gap) return;

@@ -1,8 +1,6 @@
 import Phaser from 'phaser';
 import { audio } from '../audio/Audio';
 import { battleSprite } from '../data/sprites';
-import { WAVES } from '../data/waves';
-import { loadBestWave } from '../save';
 import { POKEBALL_CURSOR, WHITE, drawPanel, textStyle } from '../ui/theme';
 
 const STARTERS = ['bulbasaur', 'charmander', 'squirtle'];
@@ -53,12 +51,6 @@ export class TitleScene extends Phaser.Scene {
       .setOrigin(0.5);
     this.tweens.add({ targets: logo, y: 102, duration: 1400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
 
-    const best = loadBestWave();
-    if (best > 0) {
-      const record = best >= WAVES.length ? '¡RUTA 1 COMPLETADA!' : `RECORD: OLEADA ${best}/${WAVES.length}`;
-      this.add.text(W / 2, 196, record, textStyle(8, WHITE, '#1d2c5e')).setOrigin(0.5);
-    }
-
     // Iniciales
     STARTERS.forEach((key, i) => {
       const x = W / 2 + (i - 1) * 170;
@@ -92,9 +84,8 @@ export class TitleScene extends Phaser.Scene {
     if (this.starting) return;
     this.starting = true;
     audio.unlock();
-    audio.play('evolve');
-    this.cameras.main.flash(200, 255, 255, 255);
-    this.cameras.main.fadeOut(500, 0, 0, 0);
-    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => this.scene.start('Game'));
+    audio.play('click');
+    this.cameras.main.fadeOut(300, 0, 0, 0);
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => this.scene.start('MainMenu'));
   }
 }

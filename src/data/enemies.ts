@@ -1,3 +1,4 @@
+import { SCALE } from '../config';
 import type { PokeType } from './types';
 
 export interface EnemyDef {
@@ -38,7 +39,17 @@ const enemy = (
   damage: number,
   size: number,
   boss = false,
-): EnemyDef => ({ name, sprite: name.toLowerCase(), types, hp, speed, reward, damage, size, boss });
+): EnemyDef => ({
+  name,
+  sprite: name.toLowerCase(),
+  types,
+  hp,
+  speed: speed * SCALE,
+  reward,
+  damage,
+  size: Math.round(size * SCALE),
+  boss,
+});
 
 export const ENEMIES: Record<EnemyId, EnemyDef> = {
   rattata: enemy('Rattata', ['normal'], 30, 80, 5, 1, 40),
