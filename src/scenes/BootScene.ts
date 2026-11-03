@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { GAME_H, GAME_W } from '../config';
 import {
   ICON_FRAME,
   WALK_DIRS,
@@ -15,6 +16,7 @@ import {
   walkSheets,
 } from '../data/sprites';
 import { difficultyById } from '../data/map';
+import { fitCamera } from '../ui/theme';
 import { buildTextures } from '../world/textures';
 import type { GameSceneData } from './GameScene';
 
@@ -28,6 +30,7 @@ export class BootScene extends Phaser.Scene {
   }
 
   preload(): void {
+    fitCamera(this);
     this.drawLoadingBar();
     for (const key of allSpriteKeys()) {
       this.load.spritesheet(iconKey(key), iconPath(key), { frameWidth: ICON_FRAME, frameHeight: ICON_FRAME });
@@ -46,7 +49,7 @@ export class BootScene extends Phaser.Scene {
     this.registerFrontStrips();
     this.registerWalkSheets();
     buildTextures(this);
-    // Atajo de desarrollo: http://localhost:9000/#game (o #game=ruta2:hard) salta los menús
+    // Atajo de desarrollo: http://localhost:9000/#game (o #game=bosqueverde:hard) salta los menús
     const [hash, args = ''] = window.location.hash.split('=');
     const [mapId, difficulty] = args.split(':');
     if (hash === '#game') this.scene.start('Game', { mapId, difficulty: difficultyById(difficulty) } satisfies GameSceneData);
@@ -90,7 +93,8 @@ export class BootScene extends Phaser.Scene {
   }
 
   private drawLoadingBar(): void {
-    const { width, height } = this.scale;
+    const width = GAME_W;
+    const height = GAME_H;
     const w = 320;
     const x = (width - w) / 2;
     const y = height / 2;

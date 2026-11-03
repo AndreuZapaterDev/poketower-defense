@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { COLS, MAP_H, MAP_W, ROWS, TILE } from '../config';
 import { MAPS, RouteMap, mapTextureKey, type MapDef, type Tile } from '../data/map';
+import { buildTilesetTextures } from './tileset';
 
 type G = Phaser.GameObjects.Graphics;
 
@@ -89,7 +90,6 @@ export function buildTextures(scene: Phaser.Scene): void {
   });
   make(scene, 'icon-pause', 14, 14, (g) => g.fillStyle(0xffffff).fillRect(3, 2, 3, 10).fillRect(8, 2, 3, 10));
   make(scene, 'icon-play', 14, 14, (g) => g.fillStyle(0xffffff).fillTriangle(3, 1, 3, 13, 12, 7));
-  make(scene, 'tallgrass', TILE, TILE, (g) => drawTallGrass(g, 0, 0, false));
   // Fondo de los menús: dos siluetas de Poké Ball por casilla, en diagonal
   make(scene, 'menu-pattern', 64, 64, (g) => {
     for (const [cx, cy] of [[16, 16], [48, 48]]) {
@@ -97,7 +97,13 @@ export function buildTextures(scene: Phaser.Scene): void {
       g.fillStyle(0xffffff).fillRect(cx - 11, cy - 1.5, 22, 3).fillCircle(cx, cy, 4);
     }
   });
-  for (const def of MAPS) make(scene, mapTextureKey(def.id), MAP_W, MAP_H, (g) => drawMap(g, def));
+  // Los mapas con tileset se dibujan por código si el tileset no se ha podido cargar
+  const tiled = MAPS.filter((def) => def.tileset).map((def) => ({ def, key: mapTextureKey(def.id) }));
+  const tilesetReady = buildTilesetTextures(scene, tiled);
+  for (const def of MAPS) {
+    if (def.tileset && tilesetReady) continue;
+    make(scene, mapTextureKey(def.id), MAP_W, MAP_H, (g) => drawMap(g, def));
+  }
 }
 
 function drawPokeball(g: G): void {
@@ -137,7 +143,7 @@ function drawMap(g: G, def: MapDef): void {
   for (const pond of def.ponds) drawPond(g, pond);
   for (const [c, r] of def.trees) drawTree(g, c * TILE, r * TILE);
   drawSign(g, def.sign[0] * TILE, def.sign[1] * TILE);
-  drawPokeCenter(g, map.pokecenter);
+  if (map.pokecenter) drawPokeCenter(g, map.pokecenter);
 }
 
 function drawGrassTile(g: G, x: number, y: number, odd: boolean, rng: Phaser.Math.RandomDataGenerator): void {
@@ -240,7 +246,7 @@ function drawPond(g: G, [col, row]: Tile): void {
   g.fillStyle(0xf890b0).fillRect(x + 63, y + 64, 3, 3);
 }
 
-function drawPokeCenter(g: G, { x, y, w, h }: RouteMap['pokecenter']): void {
+function drawPokeCenter(g: G, { x, y, w, h }: NonNullable<RouteMap['pokecenter']>): void {
   const cx = x + w / 2;
   const wallTop = y + 34;
 

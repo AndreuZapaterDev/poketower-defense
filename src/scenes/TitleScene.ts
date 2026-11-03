@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
+import { GAME_H, GAME_W } from '../config';
 import { audio } from '../audio/Audio';
 import { battleSprite } from '../data/sprites';
-import { POKEBALL_CURSOR, WHITE, drawPanel, textStyle } from '../ui/theme';
+import { POKEBALL_CURSOR, WHITE, drawPanel, fitCamera, textStyle } from '../ui/theme';
 
 const STARTERS = ['bulbasaur', 'charmander', 'squirtle'];
 
@@ -13,8 +14,10 @@ export class TitleScene extends Phaser.Scene {
   }
 
   create(): void {
+    fitCamera(this);
     this.starting = false;
-    const { width: W, height: H } = this.scale;
+    const W = GAME_W;
+    const H = GAME_H;
     const horizon = H * 0.6;
 
     // Cielo, nubes, colinas y hierba

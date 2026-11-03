@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { audio } from '../audio/Audio';
-import { MAP_H, MAP_W } from '../config';
+import { GAME_W, MAP_H, MAP_W } from '../config';
 import { DIFFICULTIES, DIFFICULTY_IDS, MAPS, mapTextureKey, type Difficulty, type MapDef } from '../data/map';
 import { WAVES } from '../data/waves';
 import { loadBestWave } from '../save';
@@ -13,6 +13,7 @@ import {
   drawMenuBackground,
   drawPanel,
   textStyle,
+  fitCamera,
 } from '../ui/theme';
 import type { GameSceneData } from './GameScene';
 
@@ -40,12 +41,13 @@ export class MapSelectScene extends Phaser.Scene {
   }
 
   create(): void {
+    fitCamera(this);
     this.options = MAPS.flatMap((map) => DIFFICULTY_IDS.map((difficulty) => ({ map, difficulty })));
     this.selected = 0;
     this.starting = false;
     this.cardHighlights = [];
     this.buttonHighlights = [];
-    const W = this.scale.width;
+    const W = GAME_W;
 
     drawMenuBackground(this);
     addMenuHeader(this, 'ELIGE UN MAPA', () => this.back());

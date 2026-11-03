@@ -1,8 +1,14 @@
 import Phaser from 'phaser';
 import { audio } from '../audio/Audio';
+import { GAME_H, GAME_W, RENDER_ZOOM } from '../config';
 import { TYPE_COLORS, TYPE_NAMES, type PokeType } from '../data/types';
 
 export const FONT = '"Press Start 2P", monospace';
+
+/** Ajusta la cámara al lienzo ampliado (ver RENDER_ZOOM). Se llama al empezar cada escena */
+export function fitCamera(scene: Phaser.Scene): void {
+  scene.cameras.main.setOrigin(0, 0).setZoom(RENDER_ZOOM);
+}
 
 /** Cursor con forma de Poké Ball */
 export const POKEBALL_CURSOR =
@@ -23,6 +29,7 @@ export function textStyle(
     fontFamily: FONT,
     fontSize: `${size}px`,
     color,
+    resolution: RENDER_ZOOM,
     ...(shadow && { shadow: { offsetX: offset, offsetY: offset, color: shadow, fill: true } }),
   };
 }
@@ -51,7 +58,8 @@ export const MENU_FOOTER_H = 40;
 
 /** Fondo de los menús: cielo degradado con siluetas de Poké Ball que se desplazan en diagonal */
 export function drawMenuBackground(scene: Phaser.Scene): void {
-  const { width: W, height: H } = scene.scale;
+  const W = GAME_W;
+  const H = GAME_H;
   scene.add.graphics().fillGradientStyle(0x68a8e8, 0x68a8e8, 0xc8e4f8, 0xc8e4f8, 1).fillRect(0, 0, W, H);
   const pattern = scene.add.tileSprite(0, 0, W, H, 'menu-pattern').setOrigin(0).setAlpha(0.22);
   scene.tweens.add({ targets: pattern, tilePositionX: 64, tilePositionY: 64, duration: 5000, repeat: -1 });
@@ -59,7 +67,7 @@ export function drawMenuBackground(scene: Phaser.Scene): void {
 
 /** Franja roja superior con el título; con `onBack`, añade un botón para volver */
 export function addMenuHeader(scene: Phaser.Scene, title: string, onBack?: () => void): void {
-  const W = scene.scale.width;
+  const W = GAME_W;
   const h = MENU_HEADER_H;
   const g = scene.add.graphics().setDepth(40);
   g.fillStyle(0x303030).fillRect(0, 0, W, h + 4);
@@ -85,7 +93,8 @@ export function addMenuHeader(scene: Phaser.Scene, title: string, onBack?: () =>
 
 /** Franja oscura inferior con las teclas, p. ej. [['ENTER', 'Elegir'], ['ESC', 'Volver']] */
 export function addMenuFooter(scene: Phaser.Scene, hints: [key: string, label: string][]): void {
-  const { width: W, height: H } = scene.scale;
+  const W = GAME_W;
+  const H = GAME_H;
   const y = H - MENU_FOOTER_H;
   const g = scene.add.graphics().setDepth(40);
   g.fillStyle(0x303030).fillRect(0, y - 4, W, MENU_FOOTER_H + 4);
@@ -144,7 +153,7 @@ class BackButton extends Phaser.GameObjects.Container {
 /** Título grande amarillo con borde azul, como el logo */
 export function addMenuTitle(scene: Phaser.Scene, y: number, text: string, size = 24) {
   return scene.add
-    .text(scene.scale.width / 2, y, text, {
+    .text(GAME_W / 2, y, text, {
       ...textStyle(size, '#ffcb05', '#1d2c5e'),
       stroke: '#3c5aa6',
       strokeThickness: size >= 32 ? 10 : 8,

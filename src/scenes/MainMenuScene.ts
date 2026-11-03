@@ -1,8 +1,10 @@
 import Phaser from 'phaser';
+import { GAME_H, GAME_W } from '../config';
 import { audio } from '../audio/Audio';
 import { battleSprite } from '../data/sprites';
 import { TOWERS } from '../data/towers';
 import { TYPE_COLORS } from '../data/types';
+import { exportAccount } from '../save';
 import {
   INK,
   MENU_HEADER_H,
@@ -14,9 +16,10 @@ import {
   drawMenuBackground,
   drawPanel,
   textStyle,
+  fitCamera,
 } from '../ui/theme';
 
-type IconKind = 'play' | 'team' | 'user' | 'pokeshop' | 'itemshop' | 'options';
+type IconKind = 'play' | 'team' | 'user' | 'pokeshop' | 'itemshop' | 'options' | 'save';
 
 interface MenuItem {
   label: string;
@@ -24,8 +27,10 @@ interface MenuItem {
   description: string;
   /** Pokémon de la tienda que se muestra al lado (id de TOWERS) */
   showcase: string;
-  /** Escena a la que lleva; sin escena, la sección aún no existe */
+  /** Escena a la que lleva; sin escena ni acción, la sección aún no existe */
   scene?: string;
+  /** Acción que se ejecuta en el propio menú, sin cambiar de escena */
+  action?: 'saveAccount';
 }
 
 const ITEMS: MenuItem[] = [
@@ -67,12 +72,19 @@ const ITEMS: MenuItem[] = [
     scene: 'Options',
     description: 'Ajusta el volumen de la música y de los efectos.',
   },
+  {
+    label: 'GUARDAR CUENTA',
+    icon: 'save',
+    showcase: 'bulbasaur',
+    action: 'saveAccount',
+    description: 'Descarga un archivo con el estado de tu cuenta: récords y opciones.',
+  },
 ];
 
 const LIST_X = 40;
 const LIST_Y = MENU_HEADER_H + 24;
 const LIST_W = 480;
-const ROW_H = 52;
+const ROW_H = 44;
 const LIST_PAD = 14;
 const DIALOG_H = 84;
 /** Milisegundos por letra del texto del cuadro de diálogo */
@@ -96,11 +108,13 @@ export class MainMenuScene extends Phaser.Scene {
   }
 
   create(): void {
+    fitCamera(this);
     this.selected = 0;
     this.leaving = false;
     this.typing = null;
     this.pop = null;
-    const { width: W, height: H } = this.scale;
+    const W = GAME_W;
+    const H = GAME_H;
 
     drawMenuBackground(this);
     addMenuHeader(this, 'POKéTOWER DEFENSE');
@@ -134,7 +148,7 @@ export class MainMenuScene extends Phaser.Scene {
 
     ITEMS.forEach((item, i) => {
       const y = this.rowY(i);
-      const enabled = !!item.scene;
+      const enabled = !!(item.scene || item.action);
       drawMenuIcon(this.add.graphics(), item.icon, LIST_X + 52, y);
       this.add
         .text(LIST_X + 80, y, item.label, textStyle(16, enabled ? INK : '#909090'))
@@ -222,7 +236,7 @@ export class MainMenuScene extends Phaser.Scene {
       this.pop = this.tweens.add({ targets: this.showcase, scale: { from: 0, to: scale }, duration: 220, ease: 'Back.easeOut' });
     }
 
-    this.typeText(item.scene ? item.description : `${item.description}\n¡Disponible próximamente!`);
+    this.typeText(item.scene || item.action ? item.description : `${item.description}\n¡Disponible próximamente!`);
   }
 
   /** Escribe el texto letra a letra, como los diálogos de los juegos */
@@ -246,6 +260,10 @@ export class MainMenuScene extends Phaser.Scene {
     if (item.scene) {
       audio.play('click');
       this.go(item.scene);
+    } else if (item.action === 'saveAccount') {
+      const saved = exportAccount();
+      audio.play(saved ? 'click' : 'error');
+      this.typeText(saved ? '¡Cuenta guardada! Revisa tus descargas.' : 'No se ha podido guardar la cuenta.');
     } else {
       audio.play('error');
       this.cameras.main.shake(120, 0.004);
@@ -309,6 +327,14 @@ function drawMenuIcon(g: Phaser.GameObjects.Graphics, kind: IconKind, cx: number
       g.fillStyle(0x303030).fillCircle(cx, cy, 9);
       g.fillStyle(0x9098a8).fillCircle(cx, cy, 7.5);
       g.fillStyle(0x303030).fillCircle(cx, cy, 3);
+      break;
+    case 'save':
+      // Disquete
+      g.fillStyle(0x303030).fillRoundedRect(cx - 11, cy - 11, 22, 22, 3);
+      g.fillStyle(0x3c64c8).fillRoundedRect(cx - 10, cy - 10, 20, 20, 2);
+      g.fillStyle(0xd0d8e8).fillRect(cx - 6, cy - 10, 12, 7);
+      g.fillStyle(0x303030).fillRect(cx + 1, cy - 9, 3, 5);
+      g.fillStyle(0xf8f8f8).fillRect(cx - 7, cy + 2, 14, 8);
       break;
   }
 }

@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { GAME_H, GAME_W } from '../config';
 import { audio } from '../audio/Audio';
 import type { VolumeChannel } from '../save';
 import { VolumeSlider } from '../ui/VolumeSlider';
@@ -10,6 +11,7 @@ import {
   drawMenuBackground,
   drawPanel,
   textStyle,
+  fitCamera,
 } from '../ui/theme';
 
 const PANEL_W = 700;
@@ -40,9 +42,11 @@ export class OptionsScene extends Phaser.Scene {
   }
 
   create(): void {
+    fitCamera(this);
     this.selected = 0;
     this.sliders = [];
-    const { width: W, height: H } = this.scale;
+    const W = GAME_W;
+    const H = GAME_H;
 
     drawMenuBackground(this);
     addMenuHeader(this, 'OPCIONES', () => this.back());

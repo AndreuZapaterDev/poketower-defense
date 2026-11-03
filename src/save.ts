@@ -43,3 +43,26 @@ export function loadVolume(channel: VolumeChannel): number {
 }
 
 export const saveVolume = (channel: VolumeChannel, volume: number) => write(volumeKey(channel), String(volume));
+
+const ACCOUNT_PREFIX = 'poketower.';
+
+/** Descarga un archivo con todo lo guardado de la cuenta. Devuelve false si no se pudo */
+export function exportAccount(): boolean {
+  try {
+    const data: Record<string, string> = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(ACCOUNT_PREFIX)) data[key] = localStorage.getItem(key) ?? '';
+    }
+    const file = JSON.stringify({ version: 1, savedAt: new Date().toISOString(), data }, null, 2);
+    const url = URL.createObjectURL(new Blob([file], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `poketower-cuenta-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}

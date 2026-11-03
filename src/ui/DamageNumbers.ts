@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { RENDER_ZOOM } from '../config';
 import { FONT } from './theme';
 
 export type DamageKind = 'normal' | 'super' | 'weak' | 'crit' | 'burn';
@@ -31,7 +32,7 @@ export class DamageNumbers {
   show(x: number, y: number, amount: number, kind: DamageKind): void {
     const style = STYLES[kind];
     const big = style.size > 16 || kind === 'super';
-    const text = this.pool.pop() ?? this.scene.add.text(0, 0, '', { fontFamily: FONT }).setOrigin(0.5).setDepth(DEPTH);
+    const text = this.pool.pop() ?? this.scene.add.text(0, 0, '', { fontFamily: FONT, resolution: RENDER_ZOOM }).setOrigin(0.5).setDepth(DEPTH);
     text
       .setText(`${Math.max(1, Math.round(amount))}${style.suffix}`)
       .setFontSize(style.size)

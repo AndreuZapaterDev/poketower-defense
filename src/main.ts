@@ -1,7 +1,8 @@
 import '@fontsource/press-start-2p';
 import Phaser from 'phaser';
-import { GAME_H, GAME_W } from './config';
+import { GAME_H, GAME_W, RENDER_ZOOM } from './config';
 import { loadFrontStrips, loadWalkSheets } from './data/sprites';
+import { loadOutsideTileset } from './world/tileset';
 import { BootScene } from './scenes/BootScene';
 import { GameScene } from './scenes/GameScene';
 import { MainMenuScene } from './scenes/MainMenuScene';
@@ -12,8 +13,8 @@ import { TitleScene } from './scenes/TitleScene';
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
   parent: 'game',
-  width: GAME_W,
-  height: GAME_H,
+  width: GAME_W * RENDER_ZOOM,
+  height: GAME_H * RENDER_ZOOM,
   backgroundColor: '#000000',
   pixelArt: true,
   // El sonido se genera con Web Audio propio (src/audio/Audio.ts)
@@ -33,6 +34,7 @@ Promise.all([
   document.fonts.load('16px "Press Start 2P"').catch(() => undefined),
   loadFrontStrips(),
   loadWalkSheets(),
+  loadOutsideTileset(),
 ])
   .then(() => {
     const game = new Phaser.Game(config);

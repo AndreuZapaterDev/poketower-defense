@@ -28,7 +28,7 @@ import { MessageBox } from '../ui/MessageBox';
 import { Sidebar } from '../ui/Sidebar';
 import { VolumeSlider } from '../ui/VolumeSlider';
 import { WavePreview } from '../ui/WavePreview';
-import { POKEBALL_CURSOR, caps, drawPanel, textStyle } from '../ui/theme';
+import { POKEBALL_CURSOR, caps, drawPanel, fitCamera, textStyle } from '../ui/theme';
 import { addAmbient } from '../world/Ambient';
 import { Effects } from '../world/Effects';
 
@@ -87,15 +87,16 @@ export class GameScene extends Phaser.Scene {
   private rangeGfx!: Phaser.GameObjects.Graphics;
   private selectionRing!: Phaser.GameObjects.Graphics;
   private ghost!: Phaser.GameObjects.Image;
-  private tallGrass!: Phaser.GameObjects.Image;
   /** Solo existe mientras el juego está en pausa (así sus botones no se pueden pulsar ocultos) */
   private pausePanel: Phaser.GameObjects.Container | null = null;
+  private leaving = false;
 
   constructor() {
     super('Game');
   }
 
   create(data: GameSceneData): void {
+    fitCamera(this);
     // El estado se reinicia aquí porque scene.restart() reutiliza la misma instancia
     this.map = new RouteMap(mapById(data?.mapId));
     this.difficultyId = difficultyById(data?.difficulty);
@@ -118,12 +119,6 @@ export class GameScene extends Phaser.Scene {
 
     this.cameras.main.fadeIn(400, 0, 0, 0);
     this.add.image(0, 0, mapTextureKey(this.map.def.id)).setOrigin(0).setDepth(0);
-    // Hierba alta por delante de los enemigos: parece que salen de ella
-    const [spawnCol, spawnRow] = this.map.def.spawn;
-    this.tallGrass = this.add
-      .image(spawnCol * TILE, spawnRow * TILE, 'tallgrass')
-      .setOrigin(0)
-      .setDepth(25);
     addAmbient(this, this.map.def.ponds);
 
     this.rangeGfx = this.add.graphics().setDepth(5);
@@ -132,6 +127,7 @@ export class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: this.selectionRing, alpha: 0.3, duration: 450, yoyo: true, repeat: -1 });
     this.ghost = this.add.image(0, 0, 'px').setOrigin(0.5, 1).setDepth(15).setAlpha(0.7).setVisible(false);
     this.pausePanel = null;
+    this.leaving = false;
 
     this.effects = new Effects(this);
     this.damageNumbers = new DamageNumbers(this);
@@ -247,28 +243,12 @@ export class GameScene extends Phaser.Scene {
     while (this.spawnQueue.length && this.spawnQueue[0].time <= this.waveTime) {
       const { def } = this.spawnQueue.shift()!;
       this.enemies.push(new Enemy(this, def, hpMultiplier, def.boss ? level + 15 : level, this.map.waypoints));
-      this.rustleGrass();
       if (def.boss) {
         this.cameras.main.shake(300, 0.006);
         audio.play('boss');
         this.messages.show(`¡Un ${def.name.toUpperCase()} salvaje apareció!`);
       }
     }
-  }
-
-  /** La hierba alta se agita cuando sale un Pokémon, como en los juegos */
-  private rustleGrass(): void {
-    const baseX = this.map.def.spawn[0] * TILE;
-    this.tweens.killTweensOf(this.tallGrass);
-    this.tallGrass.setX(baseX);
-    this.tweens.add({
-      targets: this.tallGrass,
-      x: { from: baseX - 2, to: baseX + 2 },
-      duration: 45,
-      yoyo: true,
-      repeat: 2,
-      onComplete: () => this.tallGrass.setX(baseX),
-    });
   }
 
   private removeFinishedEnemies(): void {
@@ -549,13 +529,13 @@ export class GameScene extends Phaser.Scene {
 
   private onPointerMove(pointer: Phaser.Input.Pointer): void {
     if (!this.placing) return;
-    if (pointer.x >= MAP_W) {
+    if (pointer.worldX >= MAP_W) {
       this.ghost.setVisible(false);
       this.rangeGfx.clear();
       return;
     }
-    const col = Math.floor(pointer.x / TILE);
-    const row = Math.floor(pointer.y / TILE);
+    const col = Math.floor(pointer.worldX / TILE);
+    const row = Math.floor(pointer.worldY / TILE);
     const pos = tileCenter(col, row);
     const valid = this.canPlace(col, row);
     const sprite = this.placing.stages[0].sprite;
@@ -571,14 +551,14 @@ export class GameScene extends Phaser.Scene {
     audio.unlock();
     audio.startMusic();
     // Los clics en paneles (pausa, confirmaciones) no llegan al mapa de debajo
-    if (this.gameOver || pointer.x >= MAP_W || currentlyOver.length > 0) return;
+    if (this.gameOver || pointer.worldX >= MAP_W || currentlyOver.length > 0) return;
     if (pointer.rightButtonDown()) {
       this.cancelPlacing();
       this.select(null);
       return;
     }
-    const col = Math.floor(pointer.x / TILE);
-    const row = Math.floor(pointer.y / TILE);
+    const col = Math.floor(pointer.worldX / TILE);
+    const row = Math.floor(pointer.worldY / TILE);
 
     if (this.placing) {
       const def = this.placing;
@@ -779,7 +759,7 @@ export class GameScene extends Phaser.Scene {
     const labelW = 104;
     const pad = 24;
     const w = pad * 2 + labelW + VolumeSlider.width(barWidth);
-    const h = 196;
+    const h = 248;
     const g = drawPanel(this.add.graphics(), 0, 0, w, h);
     const title = this.add.text(w / 2, 30, 'PAUSA', textStyle(24)).setOrigin(0.5);
     const rows = (['music', 'sfx'] as const).flatMap((channel, i) => {
@@ -789,8 +769,21 @@ export class GameScene extends Phaser.Scene {
         .setOrigin(0, 0.5);
       return [label, new VolumeSlider(this, pad + labelW, y, channel, { barWidth })];
     });
+    const homeW = 200;
+    const home = new Button(this, (w - homeW) / 2, h - 82, homeW, 34, 'MENU PRINCIPAL', () => this.goHome(), {
+      variant: 'red',
+    });
     const hint = this.add.text(w / 2, h - 24, 'Pulsa P para seguir', textStyle(8)).setOrigin(0.5);
-    return this.add.container((MAP_W - w) / 2, (MAP_H - h) / 2 - 30, [g, title, ...rows, hint]).setDepth(170);
+    return this.add.container((MAP_W - w) / 2, (MAP_H - h) / 2 - 30, [g, title, ...rows, home, hint]).setDepth(170);
+  }
+
+  /** Abandona la partida y vuelve al menú general */
+  private goHome(): void {
+    if (this.leaving) return;
+    this.leaving = true;
+    audio.stopMusic();
+    this.cameras.main.fadeOut(250, 0, 0, 0);
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => this.scene.start('MainMenu'));
   }
 
   /** Cartel con el nombre de la zona que baja desde arriba, como al entrar en una ruta */
