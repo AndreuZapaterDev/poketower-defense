@@ -6,29 +6,48 @@ import {
   DIFFICULTIES,
   RouteMap,
   difficultyById,
+  goalName,
   mapById,
   mapTextureKey,
   tileCenter,
   tileKey,
   type Difficulty,
   type DifficultyDef,
+  type MapDef,
 } from '../data/map';
-import { BURN, FLAME_WIDTH, SLOW, SPLASH_RADIUS, TOWERS, type TowerAbility, type TowerDef } from '../data/towers';
+import {
+  BURN,
+  FLAME_WIDTH,
+  SLOW,
+  SPLASH_RADIUS,
+  TOWERS,
+  priceOf,
+  setPriceFactor,
+  type TowerAbility,
+  type TowerDef,
+} from '../data/towers';
+import type { UpgradeEffects } from '../data/upgrades';
+import { SPECIAL } from '../data/skills';
 import { TYPE_COLORS, effectiveness } from '../data/types';
 import { battleSprite, feetAnchor } from '../data/sprites';
-import { WAVES } from '../data/waves';
+import { wavesFor, type Wave } from '../data/waves';
 import { Enemy } from '../objects/Enemy';
 import { Projectile } from '../objects/Projectile';
 import { TOWER_FEET_Y, Tower, towerScale } from '../objects/Tower';
-import { saveBestWave } from '../save';
+import { currentTeam, currentUpgradeEffects, isMapUnlocked, lockedMaps, ownedItems, ownedPokemon } from '../progress';
+import { plateMultiplier } from '../data/items';
+import { scoreGame } from '../data/points';
+import { addPoints, loadBestWave, saveBestWave } from '../save';
+import { clearSavedGame, saveGame, savedGameFor, type SavedGame } from '../savedGame';
 import { BossBar } from '../ui/BossBar';
 import { Button } from '../ui/Button';
 import { DamageNumbers, type DamageKind } from '../ui/DamageNumbers';
 import { MessageBox } from '../ui/MessageBox';
 import { Sidebar } from '../ui/Sidebar';
+import { SkillPanel } from '../ui/SkillPanel';
 import { VolumeSlider } from '../ui/VolumeSlider';
 import { WavePreview } from '../ui/WavePreview';
-import { POKEBALL_CURSOR, caps, drawPanel, fitCamera, textStyle } from '../ui/theme';
+import { POKEBALL_CURSOR, addSectionLabel, caps, drawPanel, fitCamera, textStyle } from '../ui/theme';
 import { addAmbient } from '../world/Ambient';
 import { Effects } from '../world/Effects';
 
@@ -39,6 +58,8 @@ interface SpawnEntry {
 
 const PROJECTILE_SPEED = 400 * SCALE;
 const SPEEDS = [1, 2, 3];
+/** Cada cuántos milisegundos se actualiza la pestaña de daño de la barra lateral */
+const DAMAGE_REFRESH_MS = 250;
 const CRIT_CHANCE = 1 / 16;
 const CRIT_MULT = 1.5;
 const PROJECTILES: Partial<Record<TowerAbility, { texture: string; trail: 'fire' | 'water' }>> = {
@@ -56,6 +77,8 @@ const ATTACK_SFX: Record<TowerAbility, SfxName> = {
 export interface GameSceneData {
   mapId?: string;
   difficulty?: Difficulty;
+  /** Continuar la partida guardada de ese mapa y dificultad, si la hay */
+  resume?: boolean;
 }
 
 export class GameScene extends Phaser.Scene {
@@ -77,6 +100,33 @@ export class GameScene extends Phaser.Scene {
   private paused = false;
   private gameOver = false;
   private confirmingReset = false;
+  /** Pokémon salvajes derrotados en la partida, para el resumen final */
+  private defeated = 0;
+  /** Récord del mapa y la dificultad al empezar, para saber si se ha batido */
+  private startBest = 0;
+  private damageRefresh = 0;
+  /** Mejoras de la cuenta que se aplican en esta partida */
+  private upgrades!: UpgradeEffects;
+  /** Objetos comprados en la tienda de la cuenta */
+  private items = new Set<string>();
+  /** Pokémon que tiene la cuenta: solo esos se pueden colocar */
+  private owned = new Set<string>();
+  /** Equipo elegido en la pantalla EQUIPO: son los que salen en la tienda de la barra lateral */
+  private team: TowerDef[] = [];
+  /** Oleadas de este mapa en esta dificultad */
+  private waves: Wave[] = [];
+  /** Mapas cerrados al empezar, para avisar al final de los que se han abierto */
+  private lockedAtStart: MapDef[] = [];
+  /** Hasta que la partida está montada no se guarda nada (ver saveCheckpoint) */
+  private ready = false;
+  /**
+   * En pantallas táctiles no hay "pasar por encima": el primer toque en una casilla enseña dónde
+   * quedaría el Pokémon y su alcance, y el segundo en la misma casilla lo coloca
+   */
+  private touchPreview: string | null = null;
+  /** Árbol de habilidades abierto (pausa el juego mientras tanto) */
+  private skillPanel: SkillPanel | null = null;
+  private pausedBeforeSkills = false;
 
   private sidebar!: Sidebar;
   private messages!: MessageBox;
@@ -98,11 +148,23 @@ export class GameScene extends Phaser.Scene {
   create(data: GameSceneData): void {
     fitCamera(this);
     // El estado se reinicia aquí porque scene.restart() reutiliza la misma instancia
+    this.ready = false;
+    this.touchPreview = null;
+    this.skillPanel = null;
     this.map = new RouteMap(mapById(data?.mapId));
     this.difficultyId = difficultyById(data?.difficulty);
     this.difficulty = DIFFICULTIES[this.difficultyId];
-    this.money = this.difficulty.startMoney;
-    this.lives = this.difficulty.startLives;
+    this.waves = wavesFor(this.map.def.id, this.difficultyId);
+    // Las mejoras de la cuenta: más dinero y vidas al empezar y el descuento de la tienda
+    this.upgrades = currentUpgradeEffects();
+    this.items = ownedItems();
+    this.owned = ownedPokemon();
+    this.team = currentTeam()
+      .map((id) => TOWERS.find((t) => t.id === id))
+      .filter((d): d is TowerDef => !!d);
+    setPriceFactor(this.upgrades.priceFactor);
+    this.money = this.difficulty.startMoney + this.upgrades.startMoney;
+    this.lives = this.difficulty.startLives + this.upgrades.extraLives;
     this.waveIndex = -1;
     this.waveActive = false;
     this.waveTime = 0;
@@ -116,6 +178,9 @@ export class GameScene extends Phaser.Scene {
     this.paused = false;
     this.gameOver = false;
     this.confirmingReset = false;
+    this.defeated = 0;
+    this.startBest = loadBestWave(this.map.def.id, this.difficultyId);
+    this.lockedAtStart = lockedMaps();
 
     this.cameras.main.fadeIn(400, 0, 0, 0);
     this.add.image(0, 0, mapTextureKey(this.map.def.id)).setOrigin(0).setDepth(0);
@@ -144,7 +209,9 @@ export class GameScene extends Phaser.Scene {
       onToggleSpeed: () => this.toggleSpeed(),
       onToggleMute: () => this.toggleMute(),
       onReset: () => this.confirmReset(),
-    });
+      onSelectTower: (tower) => this.select(tower),
+      onOpenSkills: () => this.toggleSkills(),
+    }, this.team);
 
     this.input.setDefaultCursor(POKEBALL_CURSOR);
     this.bindInput();
@@ -152,8 +219,14 @@ export class GameScene extends Phaser.Scene {
     audio.startMusic();
 
     this.showLocation(this.map.def.name, this.difficulty.label);
-    this.wavePreview.show(1, WAVES[0]);
-    this.messages.show('¡Los Pokémon salvajes van hacia el Centro Pokémon! Coloca tus Pokémon y pulsa ¡LUCHAR!');
+    const saved = data?.resume ? savedGameFor(this.map.def.id, this.difficultyId) : null;
+    if (saved) {
+      this.restoreGame(saved);
+    } else {
+      this.wavePreview.show(1, this.waves[0]);
+      this.messages.show(`¡Los Pokémon salvajes van hacia ${goalName(this.map.def)}! Coloca tus Pokémon y pulsa ¡LUCHAR!`);
+    }
+    this.ready = true;
     this.refreshUi();
   }
 
@@ -179,6 +252,8 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.removeFinishedEnemies();
+    this.damageRefresh -= delta;
+    if (this.damageRefresh <= 0) this.refreshDamage();
     this.bossBar.update(this.enemies.find((e) => e.def.boss && e.alive) ?? null, dt);
     if (this.gameOver) return;
     this.checkWaveComplete();
@@ -202,19 +277,28 @@ export class GameScene extends Phaser.Scene {
     keyboard.on('keydown-T', () => this.cycleTarget());
     keyboard.on('keydown-E', () => this.evolveSelected());
     keyboard.on('keydown-R', () => this.confirmReset());
+    keyboard.on('keydown-H', () => this.toggleSkills());
+    // TAB cambia de pestaña en la barra lateral; se captura para que el navegador no mueva el foco
+    keyboard.addCapture('TAB');
+    keyboard.on('keydown-TAB', () => {
+      this.sidebar.toggleTab();
+      this.refreshDamage();
+    });
     const digits = ['ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE'];
-    TOWERS.forEach((def, i) => keyboard.on(`keydown-${digits[i]}`, () => this.startPlacing(def)));
+    this.team.forEach((def, i) => keyboard.on(`keydown-${digits[i]}`, () => this.startPlacing(def)));
   }
 
   // ---------------------------------------------------------------- oleadas
 
   private startWave(): void {
-    if (this.waveActive || this.gameOver || this.waveIndex >= WAVES.length - 1) return;
+    if (this.waveActive || this.gameOver || this.waveIndex >= this.waves.length - 1) return;
+    this.closeSkills();
     if (this.paused) this.togglePause();
+    this.saveCheckpoint();
     this.waveIndex++;
     this.waveActive = true;
     this.waveTime = 0;
-    this.spawnQueue = WAVES[this.waveIndex]
+    this.spawnQueue = this.waves[this.waveIndex]
       .flatMap((group) =>
         Array.from({ length: group.count }, (_, i) => ({
           time: (group.delay ?? 0) + i * group.interval,
@@ -256,10 +340,12 @@ export class GameScene extends Phaser.Scene {
     this.enemies = this.enemies.filter((enemy) => {
       if (enemy.alive) return true;
       if (enemy.dead) {
-        this.money += enemy.def.reward;
+        const reward = Math.round(enemy.def.reward * (enemy.lastAttacker?.skillFx.lootMult ?? 1));
+        this.money += reward;
+        this.defeated++;
         if (enemy.lastAttacker) this.rewardExp(enemy.lastAttacker, enemy.def.reward);
         this.effects.poof(enemy.x, enemy.aimY);
-        this.effects.floatText(enemy.x, enemy.y + 10, `+$${enemy.def.reward}`, '#ffe066');
+        this.effects.floatText(enemy.x, enemy.y + 10, `+$${reward}`, '#ffe066');
         audio.play('faint');
       } else {
         this.lives = Math.max(0, this.lives - enemy.def.damage);
@@ -281,16 +367,16 @@ export class GameScene extends Phaser.Scene {
     this.waveActive = false;
     const completed = this.waveIndex + 1;
     saveBestWave(this.map.def.id, this.difficultyId, completed);
-    const bonus = 20 + 10 * completed;
+    const bonus = Math.round((20 + 10 * completed) * this.upgrades.waveBonus);
     this.money += bonus;
     audio.setBattle(false);
-    if (completed === WAVES.length) {
+    if (completed === this.waves.length) {
       this.endGame(true);
       return;
     }
     audio.play('clear');
     this.messages.show(`¡Oleada superada! Recibes $${bonus}.`);
-    this.wavePreview.show(completed + 1, WAVES[completed]);
+    this.wavePreview.show(completed + 1, this.waves[completed]);
     this.refreshUi();
   }
 
@@ -320,6 +406,9 @@ export class GameScene extends Phaser.Scene {
     const close = () => {
       [overlay, panel, title, hint, yes, no].forEach((o) => o.destroy());
       this.confirmingReset = false;
+    this.defeated = 0;
+    this.startBest = loadBestWave(this.map.def.id, this.difficultyId);
+    this.lockedAtStart = lockedMaps();
       this.paused = wasPaused;
       this.refreshUi();
     };
@@ -335,7 +424,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private togglePause(): void {
-    if (this.gameOver || this.confirmingReset) return;
+    if (this.gameOver || this.confirmingReset || this.skillPanel) return;
     this.paused = !this.paused;
     this.pausePanel?.destroy();
     this.pausePanel = this.paused ? this.createPausePanel() : null;
@@ -362,7 +451,7 @@ export class GameScene extends Phaser.Scene {
       const target = this.findTarget(tower);
       if (!target) continue;
       this.attack(tower, target);
-      tower.cooldown = tower.stats.fireRate;
+      tower.cooldown = tower.fireInterval;
     }
   }
 
@@ -373,7 +462,7 @@ export class GameScene extends Phaser.Scene {
     for (const enemy of this.enemies) {
       if (!enemy.alive || effectiveness(tower.def.type, enemy.def.types) === 0) continue;
       const dist = Phaser.Math.Distance.Between(tower.x, tower.y, enemy.x, enemy.y);
-      if (dist > tower.stats.range) continue;
+      if (dist > tower.range) continue;
       const score =
         tower.targetMode === 'first'
           ? enemy.distanceTravelled
@@ -400,6 +489,14 @@ export class GameScene extends Phaser.Scene {
     if (ability === 'melee') {
       this.effects.punchImpact(target.x, target.aimY, power);
       this.hit(tower, target, tower.damage);
+      // DOBLE GOLPE: a veces vuelve a pegar enseguida
+      if (tower.skillFx.special && Math.random() < SPECIAL.doubleHit) {
+        this.time.delayedCall(120 / this.speed, () => {
+          if (!target.alive || !tower.active) return;
+          this.effects.punchImpact(target.x, target.aimY, power);
+          this.hit(tower, target, tower.damage);
+        });
+      }
       return;
     }
     if (ability === 'slow') {
@@ -409,7 +506,8 @@ export class GameScene extends Phaser.Scene {
         if (!target.alive) return;
         this.effects.leafBurst(target.x, target.aimY);
         this.hit(tower, target, tower.damage);
-        target.applySlow(SLOW.factor, SLOW.duration);
+        if (tower.skillFx.special) target.applySlow(SPECIAL.slowFactor, SLOW.duration * SPECIAL.slowDuration);
+        else target.applySlow(SLOW.factor, SLOW.duration);
       });
       return;
     }
@@ -435,9 +533,10 @@ export class GameScene extends Phaser.Scene {
   private onProjectileHit(tower: Tower, target: Enemy | null, x: number, y: number): void {
     const damage = tower.damage;
     if (tower.def.ability === 'splash') {
-      this.effects.splash(x, y, SPLASH_RADIUS, tower.stage);
+      const radius = SPLASH_RADIUS * (tower.skillFx.special ? SPECIAL.splashRadius : 1);
+      this.effects.splash(x, y, radius, tower.stage);
       for (const enemy of this.enemies) {
-        if (enemy.alive && Phaser.Math.Distance.Between(x, y, enemy.x, enemy.aimY) <= SPLASH_RADIUS + enemy.hitRadius) {
+        if (enemy.alive && Phaser.Math.Distance.Between(x, y, enemy.x, enemy.aimY) <= radius + enemy.hitRadius) {
           this.hit(tower, enemy, damage);
         }
       }
@@ -446,14 +545,15 @@ export class GameScene extends Phaser.Scene {
     this.effects.fireExplosion(x, y, tower.stage);
     if (!target) return;
     const dealt = this.hit(tower, target, damage);
-    if (dealt > 0) target.applyBurn(dealt * BURN.ratio, BURN.duration, tower);
+    const burnRatio = tower.skillFx.special ? SPECIAL.burnRatio : BURN.ratio;
+    if (dealt > 0) target.applyBurn(dealt * burnRatio, BURN.duration, tower);
   }
 
   /** Daña a todos los enemigos en línea recta hasta el final del alcance */
   private flamethrower(tower: Tower, target: Enemy): void {
     const mouthY = tower.mouthY;
     const angle = Phaser.Math.Angle.Between(tower.x, mouthY, target.x, target.aimY);
-    const range = tower.stats.range;
+    const range = tower.range;
     const line = new Phaser.Geom.Line(
       tower.x,
       mouthY,
@@ -465,7 +565,8 @@ export class GameScene extends Phaser.Scene {
     const hitArea = new Phaser.Geom.Circle();
     for (const enemy of this.enemies) {
       if (!enemy.alive) continue;
-      hitArea.setTo(enemy.x, enemy.aimY, enemy.hitRadius + FLAME_WIDTH / 2);
+      const width = FLAME_WIDTH * (tower.skillFx.special ? SPECIAL.flameWidth : 1);
+      hitArea.setTo(enemy.x, enemy.aimY, enemy.hitRadius + width / 2);
       if (Phaser.Geom.Intersects.LineToCircle(line, hitArea)) this.hit(tower, enemy, tower.damage);
     }
   }
@@ -473,7 +574,7 @@ export class GameScene extends Phaser.Scene {
   /** Aplica el daño con la tabla de tipos y los críticos, y devuelve el daño real */
   private hit(tower: Tower, enemy: Enemy, baseDamage: number): number {
     const mult = effectiveness(tower.def.type, enemy.def.types);
-    const crit = mult > 0 && Math.random() < CRIT_CHANCE;
+    const crit = mult > 0 && Math.random() < CRIT_CHANCE + this.upgrades.critBonus + tower.skillFx.critBonus;
     const damage = baseDamage * mult * (crit ? CRIT_MULT : 1);
     enemy.takeDamage(damage, tower);
 
@@ -500,7 +601,12 @@ export class GameScene extends Phaser.Scene {
 
   private startPlacing(def: TowerDef): void {
     if (this.gameOver) return;
-    if (this.money < def.stages[0].cost) {
+    if (!this.owned.has(def.id)) {
+      audio.play('error');
+      this.messages.show(`Aún no tienes a ${caps(def.stages[0].name)}. ¡Consíguelo en la TIENDA DE POKéMON del menú!`);
+      return;
+    }
+    if (this.money < priceOf(def.stages[0])) {
       audio.play('error');
       return;
     }
@@ -510,6 +616,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.select(null);
     this.placing = def;
+    this.touchPreview = null;
     const sprite = def.stages[0].sprite;
     this.ghost.setTexture(battleSprite(sprite).texture, 0).setScale(towerScale(sprite, 0)).setVisible(false);
     this.refreshUi();
@@ -518,6 +625,8 @@ export class GameScene extends Phaser.Scene {
   private cancelPlacing(): void {
     if (!this.placing) return;
     this.placing = null;
+    this.touchPreview = null;
+    this.rangeGfx.clear();
     this.ghost.setVisible(false);
     this.drawSelection();
     this.refreshUi();
@@ -562,17 +671,27 @@ export class GameScene extends Phaser.Scene {
 
     if (this.placing) {
       const def = this.placing;
-      const cost = def.stages[0].cost;
+      const cost = priceOf(def.stages[0]);
+      // Con el dedo, el primer toque solo enseña la vista previa
+      if (pointer.wasTouch && this.touchPreview !== tileKey(col, row)) {
+        if (this.touchPreview === null) this.messages.show('Toca otra vez la misma casilla para colocarlo.');
+        this.touchPreview = tileKey(col, row);
+        this.onPointerMove(pointer);
+        if (!this.canPlace(col, row)) audio.play('error');
+        return;
+      }
       if (!this.canPlace(col, row) || this.money < cost) {
         audio.play('error');
         return;
       }
       this.money -= cost;
       const tower = new Tower(this, def, col, row);
+      tower.itemMult = plateMultiplier(def.type, this.items);
       this.towers.set(tileKey(col, row), tower);
       this.throwPokeBall(tower);
       this.messages.show(`¡Adelante, ${caps(def.stages[0].name)}!`);
       this.placing = null;
+      this.touchPreview = null;
       this.ghost.setVisible(false);
       this.select(tower);
       return;
@@ -584,6 +703,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private select(tower: Tower | null): void {
+    // Al cambiar de Pokémon (o vender el actual) se cierra su árbol de habilidades
+    if (this.skillPanel && tower !== this.selected) this.closeSkills();
     this.selected = tower;
     this.drawSelection();
     this.refreshUi();
@@ -617,15 +738,54 @@ export class GameScene extends Phaser.Scene {
       audio.play('levelup');
       this.messages.show(`¡${newName} ha entrenado y sube al nivel ${tower.level}!`);
     }
+    if (tower.freeSkillPoints > 0) {
+      this.messages.show(`¡${newName} tiene puntos de habilidad! Pulsa HABILIDADES (o H) para gastarlos.`);
+    }
     this.drawSelection();
+    this.refreshUi();
+  }
+
+  /** Abre o cierra el árbol de habilidades del Pokémon seleccionado (tecla H) */
+  private toggleSkills(): void {
+    if (this.skillPanel) {
+      this.closeSkills();
+      return;
+    }
+    const tower = this.selected;
+    if (!tower || this.gameOver || this.confirmingReset) return;
+    if (this.pausePanel) this.togglePause();
+    this.cancelPlacing();
+    audio.play('click');
+    this.pausedBeforeSkills = this.paused;
+    this.paused = true;
+    this.skillPanel = new SkillPanel(this, tower, {
+      onLearn: () => {
+        this.effects.sparkle(tower.x, tower.mouthY);
+        this.drawSelection();
+        this.refreshUi();
+      },
+      onClose: () => this.closeSkills(),
+    });
+    this.refreshUi();
+  }
+
+  private closeSkills(): void {
+    if (!this.skillPanel) return;
+    this.skillPanel.destroy();
+    this.skillPanel = null;
+    this.paused = this.pausedBeforeSkills;
     this.refreshUi();
   }
 
   /** Experiencia al debilitar a un Pokémon salvaje; sube de nivel automáticamente */
   private rewardExp(tower: Tower, amount: number): void {
     tower.kills++;
-    const gained = tower.gainExp(amount);
+    const pointsBefore = tower.freeSkillPoints;
+    const gained = tower.gainExp(Math.round(amount * this.upgrades.expFactor));
     if (!gained || !tower.active) return;
+    if (tower.freeSkillPoints > pointsBefore) {
+      this.effects.floatText(tower.x, tower.topY - 22, '¡PUNTO DE HABILIDAD!', '#ffd858');
+    }
     this.effects.floatText(tower.x, tower.topY - 6, `¡NV ${tower.level}!`, '#80d0ff');
     this.effects.sparkle(tower.x, tower.mouthY);
     audio.play('levelup');
@@ -732,7 +892,13 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     this.selectionRing.setPosition(tower.x, tower.y);
-    this.drawRange(tower.x, tower.y, tower.stats.range, 0xffffff);
+    this.drawRange(tower.x, tower.y, tower.range, 0xffffff);
+  }
+
+  /** Clasificación de daño de la barra lateral (solo trabaja si esa pestaña está abierta) */
+  private refreshDamage(): void {
+    this.damageRefresh = DAMAGE_REFRESH_MS;
+    this.sidebar.refreshDamage([...this.towers.values()]);
   }
 
   private refreshUi(): void {
@@ -741,40 +907,108 @@ export class GameScene extends Phaser.Scene {
         money: this.money,
         lives: this.lives,
         wave: this.waveIndex + 1,
-        totalWaves: WAVES.length,
+        totalWaves: this.waves.length,
         waveActive: this.waveActive,
-        canStartWave: !this.waveActive && !this.gameOver && this.waveIndex < WAVES.length - 1,
+        canStartWave: !this.waveActive && !this.gameOver && this.waveIndex < this.waves.length - 1,
         speed: this.speed,
         paused: this.paused,
         muted: audio.isMuted,
         placing: this.placing,
+        owned: this.owned,
       },
       this.selected,
     );
+    this.refreshDamage();
+    this.saveCheckpoint();
   }
 
-  /** Panel de pausa con los volúmenes de música y efectos */
+  /**
+   * Guarda la partida si se está entre oleadas. Una partida recién empezada (sin Pokémon ni
+   * oleadas jugadas) no se guarda, para no borrar la anterior solo por entrar a mirar un mapa.
+   */
+  private saveCheckpoint(): void {
+    if (!this.ready || this.gameOver || this.waveActive) return;
+    if (this.waveIndex < 0 && this.towers.size === 0) return;
+    saveGame({
+      mapId: this.map.def.id,
+      difficulty: this.difficultyId,
+      waveIndex: this.waveIndex,
+      money: this.money,
+      lives: this.lives,
+      defeated: this.defeated,
+      towers: [...this.towers.values()].map((t) => ({
+        tower: t.def.id,
+        col: t.col,
+        row: t.row,
+        stage: t.stage,
+        level: t.level,
+        exp: t.exp,
+        kills: t.kills,
+        damage: Math.round(t.damageDealt),
+        target: t.targetMode,
+        spent: t.spent,
+        expLevels: t.expLevels,
+        skills: [...t.skills],
+      })),
+    });
+  }
+
+  /** Monta la partida guardada: dinero, vidas, oleada y los Pokémon en su sitio */
+  private restoreGame(saved: SavedGame): void {
+    this.money = saved.money;
+    this.lives = saved.lives;
+    this.defeated = saved.defeated;
+    this.waveIndex = Math.min(saved.waveIndex, this.waves.length - 2);
+    for (const t of saved.towers) {
+      const def = TOWERS.find((d) => d.id === t.tower);
+      // Si el mapa ha cambiado y la casilla ya no vale, se devuelve lo invertido
+      if (!def || !this.canPlace(t.col, t.row)) {
+        this.money += t.spent;
+        continue;
+      }
+      const tower = new Tower(this, def, t.col, t.row);
+      tower.itemMult = plateMultiplier(def.type, this.items);
+      tower.restore(t);
+      this.towers.set(tileKey(t.col, t.row), tower);
+      tower.release();
+    }
+    const next = this.waveIndex + 1;
+    this.wavePreview.show(next + 1, this.waves[next]);
+    this.messages.show(`¡Partida recuperada! Siguiente: oleada ${next + 1} de ${this.waves.length}.`);
+  }
+
+  /** Panel de pausa: dónde estás, los volúmenes de música y efectos y botones para seguir o salir */
   private createPausePanel(): Phaser.GameObjects.Container {
     const barWidth = 200;
     const labelW = 104;
     const pad = 24;
     const w = pad * 2 + labelW + VolumeSlider.width(barWidth);
-    const h = 248;
+    const h = 288;
     const g = drawPanel(this.add.graphics(), 0, 0, w, h);
     const title = this.add.text(w / 2, 30, 'PAUSA', textStyle(24)).setOrigin(0.5);
+    const where = this.add
+      .text(w / 2, 56, `${this.map.def.name} - ${this.difficulty.label} - OLEADA ${Math.max(1, this.waveIndex + 1)}/${this.waves.length}`, textStyle(8, '#7080a0', null))
+      .setOrigin(0.5);
+    const section = addSectionLabel(this, pad, 84, w - pad * 2, 'SONIDO');
     const rows = (['music', 'sfx'] as const).flatMap((channel, i) => {
-      const y = 62 + i * 52;
+      const y = 100 + i * 48;
       const label = this.add
         .text(pad, y + VolumeSlider.height / 2, channel === 'music' ? 'MUSICA' : 'EFECTOS', textStyle(8))
         .setOrigin(0, 0.5);
       return [label, new VolumeSlider(this, pad + labelW, y, channel, { barWidth })];
     });
-    const homeW = 200;
-    const home = new Button(this, (w - homeW) / 2, h - 82, homeW, 34, 'MENU PRINCIPAL', () => this.goHome(), {
-      variant: 'red',
-    });
+    const gap = 12;
+    const bw = (w - pad * 2 - gap * 2) / 3;
+    const by = h - 82;
+    const buttons = [
+      new Button(this, pad, by, bw, 34, 'SEGUIR', () => this.togglePause(), { variant: 'green' }),
+      new Button(this, pad + bw + gap, by, bw, 34, 'REINICIAR', () => this.confirmReset(), { variant: 'blue' }),
+      new Button(this, pad + (bw + gap) * 2, by, bw, 34, 'MENU', () => this.goHome(), { variant: 'red' }),
+    ];
     const hint = this.add.text(w / 2, h - 24, 'Pulsa P para seguir', textStyle(8)).setOrigin(0.5);
-    return this.add.container((MAP_W - w) / 2, (MAP_H - h) / 2 - 30, [g, title, ...rows, home, hint]).setDepth(170);
+    return this.add
+      .container((MAP_W - w) / 2, (MAP_H - h) / 2 - 20, [g, title, where, ...section, ...rows, ...buttons, hint])
+      .setDepth(170);
   }
 
   /** Abandona la partida y vuelve al menú general */
@@ -814,33 +1048,87 @@ export class GameScene extends Phaser.Scene {
     this.refreshUi();
     audio.stopMusic();
     audio.play(won ? 'win' : 'lose');
+    clearSavedGame();
 
     const W = GAME_W;
     const H = GAME_H;
     this.add.rectangle(0, 0, W, H, 0x000000, 0.65).setOrigin(0).setDepth(200).setInteractive();
 
-    const pw = 560;
-    const ph = 200;
+    const pw = 640;
+    const ph = 330;
     const px = (W - pw) / 2;
     const py = (H - ph) / 2;
+    const depth = 202;
     drawPanel(this.add.graphics().setDepth(201), px, py, pw, ph);
+    const goal = goalName(this.map.def);
     const title = won ? '¡ENHORABUENA!' : '¡OH, NO!';
     const body = won
-      ? '¡Has defendido el Centro Pokémon de todas las oleadas!'
-      : `Los Pokémon salvajes han llegado al Centro Pokémon en la oleada ${this.waveIndex + 1}...`;
-    this.add.text(W / 2, py + 34, title, textStyle(24, won ? '#e0a000' : '#d03030')).setOrigin(0.5).setDepth(202);
+      ? `¡Ningún Pokémon salvaje ha llegado hasta ${goal} en las ${this.waves.length} oleadas!`
+      : `Los Pokémon salvajes han llegado hasta ${goal} en la oleada ${this.waveIndex + 1}...`;
+    this.add.text(W / 2, py + 34, title, textStyle(24, won ? '#e0a000' : '#d03030')).setOrigin(0.5).setDepth(depth);
     this.add
-      .text(W / 2, py + 86, body, { ...textStyle(8), align: 'center', wordWrap: { width: pw - 60 } })
+      .text(W / 2, py + 62, `${this.map.def.name} - ${this.difficulty.label}`, textStyle(8, '#7080a0', null))
+      .setOrigin(0.5)
+      .setDepth(depth);
+    this.add
+      .text(W / 2, py + 96, body, { ...textStyle(8), align: 'center', wordWrap: { width: pw - 60 } })
       .setLineSpacing(6)
       .setOrigin(0.5)
-      .setDepth(202);
-    this.add.image(W / 2, py + 120, 'pokeball').setScale(2).setDepth(202);
+      .setDepth(depth);
 
-    new Button(this, W / 2 - 190, py + ph - 56, 180, 36, 'VOLVER A JUGAR', () => this.restart(), {
-      variant: 'red',
-    }).setDepth(202);
-    new Button(this, W / 2 + 10, py + ph - 56, 180, 36, 'MAPAS', () => this.scene.start('MapSelect'), {
-      variant: 'blue',
-    }).setDepth(202);
+    // Puntos de la cuenta: por oleada, por ganar y por completar el mapa la primera vez
+    const completed = won ? this.waves.length : this.waveIndex;
+    const firstClear = won && this.startBest < this.waves.length;
+    const points = scoreGame(this.difficultyId, completed, won, firstClear);
+    const totalPoints = addPoints(points.total);
+
+    // Resumen: oleadas superadas, Pokémon derrotados, vidas que quedan y puntos ganados
+    const stats: [string, string][] = [
+      ['OLEADAS', `${completed}/${this.waves.length}`],
+      ['DERROTADOS', String(this.defeated)],
+      ['VIDAS', String(this.lives)],
+      ['PUNTOS', `+${points.total}`],
+    ];
+    const statsY = py + 150;
+    const statW = (pw - 80) / stats.length;
+    const strip = this.add.graphics().setDepth(depth);
+    strip.fillStyle(0xe8eef8).fillRoundedRect(px + 30, statsY - 26, pw - 60, 52, 6);
+    stats.forEach(([label, value], i) => {
+      const x = px + 40 + statW * (i + 0.5);
+      this.add.text(x, statsY - 10, label, textStyle(8, '#7080a0', null)).setOrigin(0.5).setDepth(depth);
+      this.add
+        .text(x, statsY + 10, value, textStyle(16, label === 'PUNTOS' ? '#d09000' : undefined))
+        .setOrigin(0.5)
+        .setDepth(depth);
+    });
+    const parts = [`oleadas +${points.waves}`];
+    if (points.victory) parts.push(`victoria +${points.victory}`);
+    if (points.firstClear) parts.push(`primera vez +${points.firstClear}`);
+    this.add
+      .text(W / 2, statsY + 40, `Puntos: ${parts.join(' · ')}  (total ${totalPoints})`, textStyle(8, '#7080a0', null))
+      .setOrigin(0.5)
+      .setDepth(depth);
+    if (completed > this.startBest) {
+      const record = this.add
+        .text(W / 2, py + 222, '¡NUEVO RECORD!', textStyle(16, '#e0a000', '#805000'))
+        .setOrigin(0.5)
+        .setDepth(depth);
+      this.tweens.add({ targets: record, scale: 1.12, duration: 450, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
+    const unlocked = this.lockedAtStart.filter(isMapUnlocked);
+    if (unlocked.length) {
+      this.add
+        .text(W / 2, py + 248, `¡Nuevo mapa desbloqueado: ${unlocked.map((m) => m.name).join(', ')}!`, textStyle(8, '#3870c8'))
+        .setOrigin(0.5)
+        .setDepth(depth);
+    }
+
+    const bw = 170;
+    const gap = 14;
+    const bx = W / 2 - (bw * 3 + gap * 2) / 2;
+    const by = py + ph - 56;
+    new Button(this, bx, by, bw, 36, 'VOLVER A JUGAR', () => this.restart(), { variant: 'red' }).setDepth(depth);
+    new Button(this, bx + bw + gap, by, bw, 36, 'MAPAS', () => this.scene.start('MapSelect'), { variant: 'blue' }).setDepth(depth);
+    new Button(this, bx + (bw + gap) * 2, by, bw, 36, 'MENU', () => this.scene.start('MainMenu'), { variant: 'gray' }).setDepth(depth);
   }
 }

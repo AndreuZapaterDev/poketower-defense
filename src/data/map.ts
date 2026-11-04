@@ -3,6 +3,47 @@ import { COLS, ROWS, TILE } from '../config';
 
 export type Tile = [number, number];
 
+/** Suelos con autotile de public/assets/tiles (ver world/tileset.ts) */
+export type GroundKind = 'light' | 'sand' | 'gravel' | 'dirt' | 'brick' | 'white';
+
+/** Fila de cada dirección en las hojas de los entrenadores */
+export type NpcDir = 'down' | 'left' | 'right' | 'up';
+export const NPC_DIRS: NpcDir[] = ['down', 'left', 'right', 'up'];
+
+/**
+ * Decorados grandes del tileset de exteriores: posición en el tileset ([fila, columna] de la
+ * esquina superior izquierda) y tamaño en casillas. Ocupan (y bloquean) todas sus casillas,
+ * con `at` en la esquina superior izquierda. Los árboles frondosos asoman la copa por la
+ * casilla central de encima (`top`), que también se dibuja y se bloquea.
+ */
+export const PROPS = {
+  /** Árbol frondoso redondo */
+  roundTree: { src: [61, 3], w: 3, h: 3, top: true },
+  /** Árbol frondoso amarillo, de otoño */
+  yellowTree: { src: [67, 3], w: 3, h: 3, top: true },
+  /** Pino grande */
+  bigPine: { src: [55, 0], w: 3, h: 3 },
+  /** Matorral amarillo */
+  yellowBush: { src: [65, 3], w: 1, h: 1 },
+  /** Matorral grande */
+  bigBush: { src: [75, 6], w: 1, h: 1 },
+} as const satisfies Record<string, { src: [number, number]; w: number; h: number; top?: boolean }>;
+export type PropKind = keyof typeof PROPS;
+
+/** Casillas que ocupa un decorado, incluida la de la copa que asoma por encima */
+export function propTiles({ kind, at: [c, r] }: { kind: PropKind; at: Tile }): Tile[] {
+  const prop: { w: number; h: number; top?: boolean } = PROPS[kind];
+  const tiles = rect(c, r, prop.w, prop.h);
+  if (prop.top) tiles.push([c + Math.floor(prop.w / 2), r - 1]);
+  return tiles;
+}
+
+/**
+ * Casillas que tapa el dibujo de un pino del tileset (1x3): el tronco y las dos de encima. No se
+ * puede construir en ninguna, y en ellas no debe haber nada más que otros árboles.
+ */
+export const pineTiles = ([c, r]: Tile): Tile[] => [[c, r], [c, r - 1], [c, r - 2]];
+
 /** Se elige al empezar la partida, en cualquier mapa */
 export type Difficulty = 'easy' | 'hard';
 export const DIFFICULTY_IDS: Difficulty[] = ['easy', 'hard'];
@@ -25,6 +66,10 @@ export const difficultyById = (id: string | undefined): Difficulty => (id === 'h
 export interface MapDef {
   id: string;
   name: string;
+  /** Línea corta bajo el nombre en la selección de mapa (en mayúsculas, sin tildes) */
+  subtitle?: string;
+  /** Id del mapa que hay que completar (en cualquier dificultad) para poder jugar este */
+  unlockedBy?: string;
   /**
    * Recorrido en coordenadas de casilla [columna, fila]. Empieza fuera del mapa y termina en la
    * puerta del Centro Pokémon (fuera del mapa con `goal: 'exit'`, o delante del líder con
@@ -63,6 +108,20 @@ export interface MapDef {
   rocks?: Tile[];
   bushes?: Tile[];
   /**
+   * Zonas de suelo con autotile (solo con tileset): hierba clara, arena, grava... Se dibujan bajo
+   * el camino, con bordes y esquinas según las casillas vecinas. Se puede construir encima.
+   */
+  ground?: { kind: GroundKind; tiles: Tile[] }[];
+  /** Decorados grandes (árboles de 3x3, pinos pequeños...); ver PROPS. No se puede construir encima. */
+  props?: { kind: PropKind; at: Tile }[];
+  /** Macizos de flores animadas (solo con tileset); no se puede construir encima */
+  flowers?: Tile[];
+  /**
+   * Entrenadores que miran la ruta (solo con tileset): imagen de public/assets/characters/NPC
+   * (`trainer_<sprite>.png`, 4x4 fotogramas de 32x48) y hacia dónde miran al empezar
+   */
+  npcs?: { sprite: string; at: Tile; dir?: NpcDir }[];
+  /**
    * Interior de gimnasio (ver world/tileset.ts): suelo de arena, camino de tablones de madera,
    * arriba la pared y una alfombra (GYM_TOP_ROWS filas en las que no se puede construir) y la
    * alfombrilla de la entrada en la primera casilla del camino, que tapa un poco la de cada lado
@@ -91,11 +150,14 @@ export const GYM_CARPET_ROWS = 2;
 /** Filas de arriba de los gimnasios en las que no se puede construir: pared y alfombra */
 export const GYM_TOP_ROWS = GYM_WALL_ROWS + GYM_CARPET_ROWS;
 
-/** Bosque de pinos al tresbolillo que llena las columnas de más, a la derecha del mapa */
+/**
+ * Bosque de pinos al tresbolillo que llena las columnas de más, a la derecha del mapa. Empieza en
+ * la fila 1: de un pino en la fila 0 solo se vería el tronco.
+ */
 function forestMargin(): Tile[] {
   const trees: Tile[] = [];
   for (let c = DESIGN_COLS; c < COLS; c++) {
-    for (let r = 0; r < ROWS; r++) if ((c + r) % 2 === 0) trees.push([c, r]);
+    for (let r = 1; r < ROWS; r++) if ((c + r) % 2 === 0) trees.push([c, r]);
   }
   return trees;
 }
@@ -108,6 +170,7 @@ export const MAPS: MapDef[] = [
   {
     id: 'ruta1',
     name: 'RUTA 1',
+    subtitle: 'BOSQUE CON HIERBA ALTA',
     // Se sale de la ruta por arriba, junto a una valla
     path: [
       [-1, 3],
@@ -122,32 +185,126 @@ export const MAPS: MapDef[] = [
     ],
     goal: 'exit',
     spawn: [0, 3],
-    // Bosque arriba, abajo y a la derecha, con algunos pinos sueltos dentro de la ruta. Los
-    // decorados de las filas 15 y 16 van en los huecos de la fila de abajo, para que no los
-    // tapen las copas.
+    // Ruta de bosque: bosque cerrado arriba, abajo y a la derecha (con árboles grandes en el
+    // borde de abajo) y pinos sueltos dentro de la ruta. Los pinos tapan su casilla y las dos de
+    // encima: ahí solo puede haber otros árboles (ver pineTiles).
     trees: [
-      ...treeRow(0, [4, 11, 18, 21]),
-      ...treeRow(17, [10, 19]),
-      [23, 16],
-      [8, 8], [14, 10], [14, 11], [2, 11],
+      // Borde de arriba en dos filas, con la salida (columna 21) entre dos pinos
+      ...treeRow(1, [0, 1, 2, 21]),
+      [3, 2], [11, 2], [16, 2], [18, 2], [20, 2], [22, 2], [23, 2],
+      // Borde de abajo, con huecos para los árboles grandes y el claro de hierba alta
+      ...treeRow(17, [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 22, 23]),
+      [3, 16], [4, 16], [5, 16], [16, 16],
+      // Borde de la derecha
+      [23, 4], [22, 6], [23, 7], [23, 10], [22, 12], [23, 13],
+      // Pinos sueltos dentro de la ruta
+      [1, 11], [3, 11], [3, 14], [8, 6], [15, 12], [19, 7], [19, 10],
       ...forestMargin(),
     ],
-    ponds: [[0, 12]],
-    // Zonas de hierba alta, siempre a una casilla o más del camino
-    tallGrass: [
-      [7, 1], [8, 1], [7, 2], [8, 2],
-      [0, 9], [1, 9], [0, 10], [1, 10],
-      [7, 10], [8, 10], [7, 11], [8, 11],
-      [13, 1], [14, 1], [13, 2], [14, 2],
+    props: [
+      { kind: 'bigPine', at: [0, 0] },
+      { kind: 'bigPine', at: [6, 15] },
+      { kind: 'roundTree', at: [13, 15] },
+      { kind: 'bigPine', at: [22, 15] },
     ],
-    sign: [3, 7],
-    fences: [[18, 1], [19, 1], [20, 1]],
+    ponds: [[0, 12]],
+    // Hierba alta por todas partes, siempre a una casilla o más del camino
+    tallGrass: [
+      ...rect(7, 2, 4, 2), [11, 3], ...rect(12, 2, 4, 2), [16, 3], [18, 3], [19, 3],
+      ...rect(0, 5, 3, 4), [3, 6], [3, 7], [0, 9], [0, 10], [0, 11], [2, 9], [2, 10], [2, 11],
+      [7, 7], [8, 7], [8, 8], [9, 8], [7, 9], [8, 9], [8, 10], [9, 10],
+      [15, 7], [13, 8], [14, 8], [14, 9], [15, 9], [13, 10], [14, 10],
+      [19, 11], [19, 12],
+      ...rect(9, 15, 4, 3),
+    ],
+    flowers: [[7, 11], [8, 11], [13, 12], [14, 12]],
+    npcs: [
+      { sprite: 'YOUNGSTER', at: [4, 9], dir: 'right' },
+      { sprite: 'LASS', at: [12, 14], dir: 'left' },
+    ],
+    sign: [4, 2],
     tileset: true,
-    rocks: [[1, 7], [15, 2], [23, 12], [10, 15]],
-    bushes: [[4, 1], [12, 2], [19, 15], [3, 14]],
+    rocks: [[4, 12], [16, 7]],
+    bushes: [[12, 4]],
   },
+  ruta2(),
   gimnasioPlateada(),
 ];
+
+/**
+ * Ruta 2: pradera con un lago y el Centro Pokémon al final. El camino va en zigzag horizontal
+ * (al revés que la Ruta 1, que va por columnas) y sube hasta la puerta del Centro Pokémon, a la
+ * derecha. Abajo, una valla de madera separa el camino de un macizo de flores.
+ */
+function ruta2(): MapDef {
+  return {
+    id: 'ruta2',
+    name: 'RUTA 2',
+    subtitle: 'PRADERA CON LAGO',
+    unlockedBy: 'ruta1',
+    path: [
+      [-1, 2],
+      [17, 2],
+      [17, 6],
+      [3, 6],
+      [3, 11],
+      [12, 11],
+      [12, 15],
+      [20, 15],
+      [20, 11],
+    ],
+    goal: 'pokecenter',
+    spawn: [0, 2],
+    tileset: true,
+    trees: [
+      // Bosque arriba (la fila 1 se ve casi entera) y abajo, donde no pisa el camino
+      ...treeRow(1, [0, 1, 2, 18, 19, 20, 21, 22, 23]),
+      ...Array.from({ length: 12 }, (_, c): Tile => [c, 17]).filter(([c]) => ![6, 7, 9, 10].includes(c)),
+      [21, 17], [22, 17], [23, 17],
+      // Borde izquierdo y derecho
+      [0, 5], [0, 10], [1, 9],
+      [23, 5], [23, 8], [23, 11], [23, 14],
+      // Pinos sueltos
+      [17, 14], [5, 10],
+      ...forestMargin(),
+    ],
+    props: [
+      { kind: 'roundTree', at: [20, 2] },
+      { kind: 'yellowTree', at: [6, 15] },
+      { kind: 'yellowBush', at: [18, 5] },
+    ],
+    ponds: [[7, 8]],
+    tallGrass: [
+      [12, 4], [13, 4], [14, 4],
+      [15, 12], [16, 12], [16, 13],
+      ...rect(1, 13, 4, 2), [0, 14],
+      ...rect(9, 14, 2, 4),
+    ],
+    flowers: [
+      [6, 4], [7, 4],
+      [15, 9], [16, 9], [15, 10], [16, 10],
+      // Macizo detrás de la valla de abajo
+      ...rect(13, 17, 7, 1),
+    ],
+    ground: [
+      // Playa de arena alrededor del lago
+      { kind: 'sand', tiles: [...rect(6, 7, 5, 4), [11, 8], [11, 9]] },
+      // Prados de hierba clara
+      { kind: 'light', tiles: [...rect(13, 7, 4, 5), ...rect(14, 12, 3, 2)] },
+      { kind: 'light', tiles: rect(18, 2, 5, 4) },
+      { kind: 'light', tiles: [...rect(0, 3, 3, 2), ...rect(8, 3, 4, 3)] },
+    ],
+    npcs: [
+      { sprite: 'TUBER_M', at: [10, 9], dir: 'left' },
+      { sprite: 'AROMALADY', at: [14, 9], dir: 'right' },
+      { sprite: 'BIRDKEEPER', at: [7, 13], dir: 'up' },
+    ],
+    sign: [1, 3],
+    fences: rect(12, 16, 8, 1),
+    rocks: [[19, 13], [2, 8]],
+    bushes: [[11, 4], [22, 13]],
+  };
+}
 
 /**
  * Gimnasio de Ciudad Plateada (tipo roca), adaptado del original: una sala centrada en el mapa,
@@ -170,6 +327,8 @@ function gimnasioPlateada(): MapDef {
   return {
     id: 'gimnasioplateada',
     name: 'GIMNASIO PLATEADA',
+    subtitle: 'DEFIENDE A BROCK',
+    unlockedBy: 'ruta2',
     // Franjas de tablones en las filas 15, 13 y 11, unidas por los extremos; de la última se
     // sube recto por el centro hasta la plataforma
     path: [at(0, ROWS), at(0, 15), at(9, 15), at(9, 13), at(-9, 13), at(-9, 11), at(0, 11), at(0, 8)],
@@ -215,6 +374,13 @@ function segmentTiles(path: Tile[]): Tile[] {
     }
   }
   return tiles;
+}
+
+/** Lo que defienden los jugadores, para los textos: "...antes de que lleguen a {goalName}" */
+export function goalName(def: MapDef): string {
+  if (def.goal === 'exit') return 'la salida de la ruta';
+  if (def.goal === 'leader') return 'el líder del gimnasio';
+  return 'el Centro Pokémon';
 }
 
 export const mapById = (id: string | undefined) => MAPS.find((m) => m.id === id) ?? MAPS[0];
@@ -263,10 +429,10 @@ export class RouteMap {
     // Los bordes del camino invaden un poco las casillas de al lado (también en diagonal) y
     // pisarían las hojas de la hierba alta: avisa si alguna está pegada al camino
     if (import.meta.env.DEV) {
-      const touching = def.tallGrass.filter(([c, r]) =>
+      const touching = [...def.tallGrass, ...(def.flowers ?? [])].filter(([c, r]) =>
         [-1, 0, 1].some((dr) => [-1, 0, 1].some((dc) => this.pathTiles.has(tileKey(c + dc, r + dr)))),
       );
-      if (touching.length) console.warn(`${def.id}: hierba alta pegada al camino en`, touching);
+      if (touching.length) console.warn(`${def.id}: hierba alta o flores pegadas al camino en`, touching);
     }
 
     const [endCol, endRow] = def.path[def.path.length - 1];
@@ -301,8 +467,8 @@ export class RouteMap {
     // La alfombrilla de la entrada del gimnasio tapa un poco la casilla de cada lado
     this.door = def.gym ? (this.centerline.find(([c, r]) => c >= 0 && c < COLS && r >= 0 && r < ROWS) ?? null) : null;
     const doorSides: Tile[] = this.door ? [[this.door[0] - 1, this.door[1]], [this.door[0] + 1, this.door[1]]] : [];
-    // Los pinos del tileset tapan con la copa la casilla de encima
-    const crowns: Tile[] = def.tileset ? def.trees.map(([c, r]): Tile => [c, r - 1]) : [];
+    // Los pinos del tileset tapan con la copa las dos casillas de encima
+    const crowns: Tile[] = def.tileset ? def.trees.flatMap(pineTiles) : [];
 
     this.blocked = new Set(
       [
@@ -313,6 +479,9 @@ export class RouteMap {
         ...(def.sign ? [def.sign] : []),
         ...(def.rocks ?? []),
         ...(def.bushes ?? []),
+        ...(def.props ?? []).flatMap(propTiles),
+        ...(def.flowers ?? []),
+        ...(def.npcs ?? []).map((npc) => npc.at),
         ...(def.statues ?? []).flatMap(([c, r]) => rect(c, r - 1, 1, 2)),
         ...(def.gym ? rect(0, 0, COLS, GYM_TOP_ROWS) : []),
         ...outside,

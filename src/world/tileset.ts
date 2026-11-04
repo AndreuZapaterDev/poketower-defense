@@ -1,6 +1,16 @@
 import Phaser from 'phaser';
 import { MAP_H, MAP_W, TILE } from '../config';
-import { GYM_TOP_ROWS, GYM_WALL_ROWS, MAPS, RouteMap, tileKey, type MapDef, type Tile } from '../data/map';
+import {
+  GYM_TOP_ROWS,
+  GYM_WALL_ROWS,
+  MAPS,
+  PROPS,
+  RouteMap,
+  tileKey,
+  type GroundKind,
+  type MapDef,
+  type Tile,
+} from '../data/map';
 
 // Tileset de exteriores (public/assets/tiles/Outside.png): casillas de 32 px en 8 columnas.
 // Mide más de 16000 px de alto, más de lo que admiten muchas GPU, así que no se sube a Phaser:
@@ -18,6 +28,11 @@ const TALL_GRASS: Src = [0, 6];
 const FLOWERS: Src = [3, 7];
 /** Estanque completo de 3x3 casillas (esquina superior izquierda) */
 const POND: Src = [86, 5];
+/**
+ * Orilla del estanque (sin agua) con las esquinas de otro suelo, para poner encima del estanque
+ * cuando está sobre ese suelo. La casilla del centro del tileset está vacía y no se copia.
+ */
+const POND_SHORE: Partial<Record<GroundKind, Src>> = { dirt: [92, 5], sand: [95, 5] };
 /** Pino estrecho: 1 casilla de ancho y 3 de alto, con el tronco en la última */
 const PINE: Src = [58, 6];
 const SIGN: Src = [119, 2];
@@ -71,11 +86,10 @@ const GYM_WALL: Src = [2, 2];
 const GYM_WALL_PLAIN_H = 14;
 /**
  * Cuartos de 16 px (en px del tileset) de la pared lateral izquierda; la derecha es la misma en
- * espejo: muro liso, muro con su filo claro a la derecha y una piedra de las columnas
+ * espejo: muro liso y muro con su filo claro a la derecha. La única columna de piedras es la del
+ * extremo de la alfombra.
  */
-const GYM_SIDE = { plain: { x: 16, y: 64 }, edge: { x: 16, y: 112 }, stone: { x: 16, y: 160 } };
-/** Filas de la pared lateral con columna de piedras: junto a la alfombra y junto a la entrada */
-const isSideStoneRow = (r: number) => r < GYM_TOP_ROWS || r >= MAP_H / TILE - 2;
+const GYM_SIDE = { plain: { x: 16, y: 64 }, edge: { x: 16, y: 112 } };
 /** Emblema de la pared, sobre el centro de la plataforma del líder, y su sombra en la alfombra */
 const GYM_EMBLEM: Src = [2, 3];
 const GYM_CARPET_EMBLEM: Src = [3, 3];
@@ -104,7 +118,33 @@ const GYM_LEADER_ROCK = { x: 176, y: 288 };
 const LEADER_FRAME = { w: 32, h: 48 };
 const LEADER_FEET_Y = 34;
 
+// Suelos con autotile en el formato de RPG Maker XP (96x128 px): arriba a la derecha, las cuatro
+// esquinas interiores; debajo, un bloque de 3x3 casillas con los bordes, las esquinas y el centro.
+const GROUND_PATHS: Record<GroundKind, string> = {
+  light: 'assets/tiles/Light grass.png',
+  sand: 'assets/tiles/Sand.png',
+  gravel: 'assets/tiles/Gravel.png',
+  dirt: 'assets/tiles/Dirt.png',
+  brick: 'assets/tiles/Brick path.png',
+  white: 'assets/tiles/White path.png',
+};
+const GROUND_KINDS = Object.keys(GROUND_PATHS) as GroundKind[];
+
+/** Flores animadas: tiras de 5 fotogramas de 32x32 */
+const FLOWER_PATHS = ['assets/tiles/Flowers1.png', 'assets/tiles/Flowers2.png'];
+export const FLOWER_FRAMES = 5;
+export const flowerKey = (i: number) => `flowers-${i}`;
+export const FLOWER_VARIANTS = FLOWER_PATHS.length;
+
+/** Entrenadores de los mapas: 4x4 fotogramas de 32x48 (una fila por dirección) */
+export const NPC_FRAME = { w: 32, h: 48 };
+export const npcKey = (sprite: string) => `npc-${sprite}`;
+const npcPath = (sprite: string) => `assets/characters/NPC/trainer_${sprite}.png`;
+
 let outside: HTMLImageElement | null = null;
+const grounds = new Map<GroundKind, HTMLImageElement>();
+const flowerImgs: (HTMLImageElement | null)[] = [];
+const npcImgs = new Map<string, HTMLImageElement>();
 let gymTiles: HTMLImageElement | null = null;
 /** Imágenes de los líderes de gimnasio, por ruta */
 const leaders = new Map<string, HTMLImageElement>();
@@ -123,16 +163,36 @@ async function loadImage(src: string): Promise<HTMLImageElement | null> {
 /** Carga los tilesets antes de arrancar Phaser; si falla, los mapas se dibujan por código */
 export async function loadTilesets(): Promise<void> {
   const leaderPaths = [...new Set(MAPS.flatMap((def) => (def.leader ? [def.leader] : [])))];
-  const [out, gym, ...leaderImgs] = await Promise.all([OUTSIDE_PATH, GYM_PATH, ...leaderPaths].map(loadImage));
+  const npcSprites = [...new Set(MAPS.flatMap((def) => (def.npcs ?? []).map((npc) => npc.sprite)))];
+  const [[out, gym], leaderImgs, groundImgs, flowers, npcs] = await Promise.all(
+    [[OUTSIDE_PATH, GYM_PATH], leaderPaths, GROUND_KINDS.map((k) => GROUND_PATHS[k]), FLOWER_PATHS, npcSprites.map(npcPath)].map(
+      (paths) => Promise.all(paths.map(loadImage)),
+    ),
+  );
   [outside, gymTiles] = [out, gym];
   leaderPaths.forEach((path, i) => {
     const img = leaderImgs[i];
     if (img) leaders.set(path, img);
   });
+  GROUND_KINDS.forEach((kind, i) => {
+    const img = groundImgs[i];
+    if (img) grounds.set(kind, img);
+  });
+  flowerImgs.push(...flowers);
+  npcSprites.forEach((sprite, i) => {
+    const img = npcs[i];
+    if (img) npcImgs.set(sprite, img);
+  });
 }
 
 /** Crea las texturas de los mapas con tileset; se salta los que no tengan su tileset cargado */
 export function buildTilesetTextures(scene: Phaser.Scene, maps: { def: MapDef; key: string }[]): void {
+  flowerImgs.forEach((img, i) => {
+    if (img && !scene.textures.exists(flowerKey(i))) scene.textures.addSpriteSheet(flowerKey(i), img, { frameWidth: SRC, frameHeight: SRC });
+  });
+  for (const [sprite, img] of npcImgs) {
+    if (!scene.textures.exists(npcKey(sprite))) scene.textures.addSpriteSheet(npcKey(sprite), img, { frameWidth: NPC_FRAME.w, frameHeight: NPC_FRAME.h });
+  }
   for (const { def, key } of maps) {
     if (scene.textures.exists(key)) continue;
     if (def.gym && gymTiles) scene.textures.addCanvas(key, drawGymMap(def, gymTiles));
@@ -172,12 +232,31 @@ function drawTileMap(def: MapDef, img: HTMLImageElement): HTMLCanvasElement {
   const cells: Tile[] = [];
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) cells.push([c, r]);
   for (const [c, r] of cells) blit(ctx, img, GRASS[rng.between(0, GRASS.length - 1)], c * TILE, r * TILE);
-  // Flores en algunas casillas libres
+  /** Suelo de cada casilla con autotile */
+  const groundTiles = new Map<string, GroundKind>();
+  for (const { kind, tiles } of def.ground ?? []) {
+    const set = new Set(tiles.map(([c, r]) => tileKey(c, r)));
+    tiles.forEach(([c, r]) => groundTiles.set(tileKey(c, r), kind));
+    const src = grounds.get(kind);
+    if (src) for (const [c, r] of tiles) drawAutotile(ctx, src, c, r, (c2, r2) => set.has(tileKey(c2, r2)), cols, rows);
+  }
+  // Florecillas sueltas en algunas casillas libres de césped
   for (const [c, r] of cells) {
-    if (map.isBuildable(c, r) && rng.frac() < 0.1) blit(ctx, img, FLOWERS, c * TILE, r * TILE);
+    if (map.isBuildable(c, r) && !groundTiles.has(tileKey(c, r)) && rng.frac() < 0.05) blit(ctx, img, FLOWERS, c * TILE, r * TILE);
   }
   for (const [c, r] of def.tallGrass) blit(ctx, img, TALL_GRASS, c * TILE, r * TILE);
-  for (const [c, r] of def.ponds) blit(ctx, img, POND, c * TILE, r * TILE, 3, 3);
+  for (const [c, r] of def.ponds) {
+    blit(ctx, img, POND, c * TILE, r * TILE, 3, 3);
+    const ground = groundTiles.get(tileKey(c, r));
+    const shore = ground && POND_SHORE[ground];
+    if (shore) {
+      for (let dr = 0; dr < 3; dr++) {
+        for (let dc = 0; dc < 3; dc++) {
+          if (dr !== 1 || dc !== 1) blit(ctx, img, [shore[0] + dr, shore[1] + dc], (c + dc) * TILE, (r + dr) * TILE);
+        }
+      }
+    }
+  }
   // El camino va después de la hierba porque sus bordes invaden un poco las casillas vecinas
   drawPath(ctx, img, map);
   if (def.sign) blit(ctx, img, SIGN, def.sign[0] * TILE, def.sign[1] * TILE);
@@ -189,6 +268,19 @@ function drawTileMap(def: MapDef, img: HTMLImageElement): HTMLCanvasElement {
     bottom: r,
     draw: () => blit(ctx, img, PINE, c * TILE, (r - 2) * TILE, 1, 3),
   }));
+  for (const { kind, at: [c, r] } of def.props ?? []) {
+    const prop: { src: Src; w: number; h: number; top?: boolean } = PROPS[kind];
+    const { src, w, h } = prop;
+    sprites.push({
+      bottom: r + h - 1,
+      draw: () => {
+        blit(ctx, img, src, c * TILE, r * TILE, w, h);
+        // Copa que asoma por la casilla central de encima
+        const mid = Math.floor(w / 2);
+        if (prop.top) blit(ctx, img, [src[0] - 1, src[1] + mid], (c + mid) * TILE, (r - 1) * TILE);
+      },
+    });
+  }
   // Vallas: pieza de extremo o de en medio según si siguen a izquierda o derecha
   const fences = new Set((def.fences ?? []).map(([c, r]) => tileKey(c, r)));
   for (const [c, r] of def.fences ?? []) {
@@ -289,13 +381,11 @@ function drawGymBack(
     for (let c = 0; c < cols; c++) {
       if (c < left - 1 || c > right + 1) quarter(GYM_SIDE.plain, c * TILE, r * TILE, TILE, TILE);
     }
-    // Pared lateral izquierda y, en espejo, la derecha: muro con su filo claro hacia dentro y,
-    // junto a la alfombra y la entrada, una columna de piedras
-    const stones = isSideStoneRow(r);
+    // Pared lateral izquierda y, en espejo, la derecha: muro con su filo claro hacia dentro
     const drawSide = (x: number) => {
       for (const dy of [0, Q * k]) {
-        quarter(stones ? GYM_SIDE.edge : GYM_SIDE.plain, x, r * TILE + dy);
-        quarter(stones ? GYM_SIDE.stone : GYM_SIDE.edge, x + Q * k, r * TILE + dy);
+        quarter(GYM_SIDE.plain, x, r * TILE + dy);
+        quarter(GYM_SIDE.edge, x + Q * k, r * TILE + dy);
       }
     };
     drawSide((left - 1) * TILE);
@@ -348,6 +438,44 @@ function drawLeaderStage(
   if (leader) {
     const { w, h } = LEADER_FRAME;
     ctx.drawImage(leader, 0, 0, w, h, rock.x + TILE - (w * k) / 2, rock.y + (LEADER_FEET_Y - h) * k, w * k, h * k);
+  }
+}
+
+/**
+ * Casilla de un suelo con autotile de RPG Maker XP: cada cuarto de 16 px sale del bloque de 3x3
+ * (centro, borde o esquina exterior) o de las esquinas interiores, según qué vecinas son del mismo
+ * suelo. Fuera del mapa cuenta como del mismo suelo, para que las zonas sigan más allá del borde.
+ */
+function drawAutotile(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  c: number,
+  r: number,
+  has: (c: number, r: number) => boolean,
+  cols: number,
+  rows: number,
+): void {
+  const k = TILE / SRC;
+  const same = (c2: number, r2: number) => c2 < 0 || r2 < 0 || c2 >= cols || r2 >= rows || has(c2, r2);
+  for (const qy of [0, 1]) {
+    for (const qx of [0, 1]) {
+      const dx = qx ? 1 : -1;
+      const dy = qy ? 1 : -1;
+      const horizontal = same(c + dx, r);
+      const vertical = same(c, r + dy);
+      let sx: number;
+      let sy: number;
+      if (horizontal && vertical && !same(c + dx, r + dy)) {
+        // Esquina interior: casilla de arriba a la derecha
+        [sx, sy] = [2 * SRC + qx * HALF, qy * HALF];
+      } else {
+        // Bloque de 3x3 que empieza en la segunda fila de casillas
+        const tileCol = horizontal ? 1 : qx ? 2 : 0;
+        const tileRow = vertical ? 2 : qy ? 3 : 1;
+        [sx, sy] = [tileCol * SRC + qx * HALF, tileRow * SRC + qy * HALF];
+      }
+      ctx.drawImage(img, sx, sy, HALF, HALF, (c * SRC + qx * HALF) * k, (r * SRC + qy * HALF) * k, HALF * k, HALF * k);
+    }
   }
 }
 

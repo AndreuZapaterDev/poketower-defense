@@ -1,32 +1,35 @@
 import Phaser from 'phaser';
 import { GAME_H, GAME_W } from '../config';
 import { audio } from '../audio/Audio';
-import { battleSprite } from '../data/sprites';
+import { DIFFICULTIES, DIFFICULTY_IDS, MAPS, mapById } from '../data/map';
 import { TOWERS } from '../data/towers';
-import { TYPE_COLORS } from '../data/types';
-import { exportAccount } from '../save';
+import { currentTeam, isCompleted, isMapCompleted, ownedPokemon } from '../progress';
+import { exportAccount, loadBestWave, loadDevUnlockAll, loadPoints, loadTrainerName, saveDevUnlockAll } from '../save';
+import { Button } from '../ui/Button';
+import { loadSavedGame } from '../savedGame';
+import { BADGES, type BadgeDef } from '../data/badges';
+import { iconAnim, iconKey } from '../data/sprites';
+import { DialogBox } from '../ui/DialogBox';
 import {
   INK,
+  WHITE,
   MENU_HEADER_H,
   POKEBALL_CURSOR,
   addMenuCursor,
   addMenuFooter,
   addMenuHeader,
-  darken,
   drawMenuBackground,
   drawPanel,
   textStyle,
   fitCamera,
 } from '../ui/theme';
 
-type IconKind = 'play' | 'team' | 'user' | 'pokeshop' | 'itemshop' | 'options' | 'save';
+type IconKind = 'play' | 'team' | 'upgrades' | 'pokeshop' | 'itemshop' | 'options' | 'save';
 
 interface MenuItem {
   label: string;
   icon: IconKind;
   description: string;
-  /** Pokémon de la tienda que se muestra al lado (id de TOWERS) */
-  showcase: string;
   /** Escena a la que lleva; sin escena ni acción, la sección aún no existe */
   scene?: string;
   /** Acción que se ejecuta en el propio menú, sin cambiar de escena */
@@ -37,45 +40,42 @@ const ITEMS: MenuItem[] = [
   {
     label: 'JUGAR',
     icon: 'play',
-    showcase: 'charmander',
     scene: 'MapSelect',
-    description: 'Elige un mapa y una dificultad, ¡y defiende el Centro Pokémon de los Pokémon salvajes!',
+    description: 'Elige un mapa y una dificultad, ¡y no dejes pasar a los Pokémon salvajes!',
   },
   {
     label: 'EQUIPO',
     icon: 'team',
-    showcase: 'bulbasaur',
-    description: 'Prepara el equipo de Pokémon que llevarás a cada partida.',
+    scene: 'Team',
+    description: 'Elige en el PC qué Pokémon llevas a las partidas: solo esos saldrán en la tienda.',
   },
   {
-    label: 'USUARIO',
-    icon: 'user',
-    showcase: 'squirtle',
-    description: 'Tu ficha de entrenador: progreso, récords y cuenta.',
+    label: 'MEJORAS',
+    icon: 'upgrades',
+    scene: 'Upgrades',
+    description: 'Gasta los puntos que ganas jugando en mejoras para todas las partidas.',
   },
   {
     label: 'TIENDA DE POKéMON',
     icon: 'pokeshop',
-    showcase: 'growlithe',
-    description: 'Consigue nuevos Pokémon para tu equipo.',
+    scene: 'PokemonShop',
+    description: 'Consigue nuevos Pokémon con tus puntos. Solo puedes usar en las partidas los que tengas.',
   },
   {
     label: 'TIENDA DE OBJETOS',
     icon: 'itemshop',
-    showcase: 'mankey',
-    description: 'Objetos que te ayudarán durante las partidas.',
+    scene: 'ItemShop',
+    description: 'Compra Tablas con tus puntos: potencian a tus Pokémon de su tipo en todas las partidas.',
   },
   {
     label: 'OPCIONES',
     icon: 'options',
-    showcase: 'squirtle',
     scene: 'Options',
     description: 'Ajusta el volumen de la música y de los efectos.',
   },
   {
     label: 'GUARDAR CUENTA',
     icon: 'save',
-    showcase: 'bulbasaur',
     action: 'saveAccount',
     description: 'Descarga un archivo con el estado de tu cuenta: récords y opciones.',
   },
@@ -87,8 +87,6 @@ const LIST_W = 480;
 const ROW_H = 44;
 const LIST_PAD = 14;
 const DIALOG_H = 84;
-/** Milisegundos por letra del texto del cuadro de diálogo */
-const TYPE_SPEED = 18;
 
 /** Menú general: punto de partida para jugar, el equipo, las tiendas y la cuenta */
 export class MainMenuScene extends Phaser.Scene {
@@ -96,12 +94,7 @@ export class MainMenuScene extends Phaser.Scene {
   private leaving = false;
   private cursor!: Phaser.GameObjects.Container;
   private rowHighlight!: Phaser.GameObjects.Graphics;
-  private showcase!: Phaser.GameObjects.Sprite;
-  private platform!: Phaser.GameObjects.Graphics;
-  private dialogText!: Phaser.GameObjects.Text;
-  private dialogArrow!: Phaser.GameObjects.Graphics;
-  private typing: Phaser.Time.TimerEvent | null = null;
-  private pop: Phaser.Tweens.Tween | null = null;
+  private dialog!: DialogBox;
 
   constructor() {
     super('MainMenu');
@@ -111,13 +104,12 @@ export class MainMenuScene extends Phaser.Scene {
     fitCamera(this);
     this.selected = 0;
     this.leaving = false;
-    this.typing = null;
-    this.pop = null;
     const W = GAME_W;
     const H = GAME_H;
 
     drawMenuBackground(this);
     addMenuHeader(this, 'POKéTOWER DEFENSE');
+    if (import.meta.env.DEV) this.addDevUnlockButton();
     addMenuFooter(this, [
       ['FLECHAS', 'Elegir'],
       ['ENTER', 'Aceptar'],
@@ -125,9 +117,9 @@ export class MainMenuScene extends Phaser.Scene {
     ]);
 
     this.createList();
-    this.createShowcase(LIST_X + LIST_W + 24, W - 40);
-    this.createDialog(LIST_X, H - 40 - 16 - DIALOG_H, W - 2 * LIST_X);
-    this.refresh(false);
+    this.createTrainerCard(LIST_X + LIST_W + 24, LIST_Y, W - 40 - (LIST_X + LIST_W + 24), this.listHeight());
+    this.dialog = new DialogBox(this, LIST_X, H - 40 - 16 - DIALOG_H, W - 2 * LIST_X, DIALOG_H);
+    this.refresh();
 
     this.input.setDefaultCursor(POKEBALL_CURSOR);
     const keyboard = this.input.keyboard;
@@ -140,8 +132,12 @@ export class MainMenuScene extends Phaser.Scene {
 
   // ---------------------------------------------------------------- construcción
 
+  private listHeight(): number {
+    return LIST_PAD * 2 + ITEMS.length * ROW_H;
+  }
+
   private createList(): void {
-    const h = LIST_PAD * 2 + ITEMS.length * ROW_H;
+    const h = this.listHeight();
     drawPanel(this.add.graphics(), LIST_X, LIST_Y, LIST_W, h);
     this.rowHighlight = this.add.graphics();
     this.cursor = addMenuCursor(this);
@@ -171,25 +167,72 @@ export class MainMenuScene extends Phaser.Scene {
     });
   }
 
-  /** Pokémon de muestra sobre una plataforma del color de su tipo */
-  private createShowcase(left: number, right: number): void {
-    const cx = (left + right) / 2;
-    const cy = LIST_Y + 250;
-    this.platform = this.add.graphics({ x: cx, y: cy });
-    this.add.image(cx, cy - 2, 'shadow').setScale(3, 1.4).setAlpha(0.25);
-    this.showcase = this.add.sprite(cx, cy + 4, 'px').setOrigin(0.5, 1);
-    this.tweens.add({ targets: this.showcase, y: cy - 4, duration: 600, yoyo: true, repeat: -1, ease: 'Quad.easeOut' });
+  /**
+   * Ficha de entrenador, como la de los juegos: tus puntos, los Pokémon que tienes, los mapas
+   * superados, tu mejor oleada, el equipo que llevas y las medallas de los gimnasios
+   */
+  private createTrainerCard(x: number, y: number, w: number, h: number): void {
+    drawPanel(this.add.graphics(), x, y, w, h);
+    const g = this.add.graphics();
+    // Tarjeta azul con franjas, como la ficha de entrenador
+    g.fillStyle(0x305890).fillRoundedRect(x + 10, y + 10, w - 20, h - 20, 10);
+    g.fillStyle(0x6898e0).fillRoundedRect(x + 12, y + 12, w - 24, h - 24, 9);
+    for (let sy = y + 50; sy < y + h - 80; sy += 16) g.fillStyle(0x78a8e8).fillRect(x + 12, sy, w - 24, 8);
+    g.fillStyle(0x305890).fillRect(x + 12, y + 42, w - 24, 3);
+    this.add.text(x + 26, y + 28, 'FICHA DE ENTRENADOR', textStyle(16, WHITE, '#203860')).setOrigin(0, 0.5);
+    this.add.image(x + w - 34, y + 28, 'pokeball').setScale(1.6);
+
+    // Datos
+    const options = MAPS.flatMap((def) => DIFFICULTY_IDS.map((d) => [def.id, d] as const));
+    const done = options.filter(([id, d]) => isCompleted(id, d)).length;
+    const best = Math.max(0, ...options.map(([id, d]) => loadBestWave(id, d)));
+    const rows: [string, string][] = [
+      ['NOMBRE', loadTrainerName() || '-'],
+      ['PUNTOS', String(loadPoints())],
+      ['POKéMON', `${ownedPokemon().size}/${TOWERS.length}`],
+      ['MAPAS SUPERADOS', `${done}/${options.length}`],
+      ['MEJOR OLEADA', best ? String(best) : '-'],
+    ];
+    rows.forEach(([label, value], i) => {
+      const ry = y + 58 + i * 18;
+      this.add.text(x + 26, ry, label, textStyle(8, WHITE, '#203860')).setOrigin(0, 0.5);
+      this.add.text(x + w - 26, ry, value, textStyle(8, '#fff0a0', '#203860')).setOrigin(1, 0.5);
+    });
+
+    // Equipo actual
+    const teamY = y + 158;
+    this.add.text(x + 26, teamY, 'EQUIPO', textStyle(8, WHITE, '#203860')).setOrigin(0, 0.5);
+    currentTeam().forEach((id, i) => {
+      const def = TOWERS.find((t) => t.id === id);
+      if (!def) return;
+      const icon = this.add.sprite(x + 104 + i * 44, teamY - 2, iconKey(def.stages[0].sprite)).setScale(0.6);
+      icon.play({ key: iconAnim(def.stages[0].sprite), startFrame: i % 2 });
+    });
+
+    // Medallas: una por gimnasio completado; las demás, hueco vacío
+    const stripY = y + h - 74;
+    g.fillStyle(0x203860).fillRoundedRect(x + 20, stripY, w - 40, 54, 8);
+    this.add.text(x + 32, stripY + 12, 'MEDALLAS', textStyle(8, WHITE, null)).setOrigin(0, 0.5);
+    const step = (w - 64) / BADGES.length;
+    BADGES.forEach((badge, i) => {
+      const bx = x + 32 + step * (i + 0.5);
+      const by = stripY + 34;
+      const earned = !!badge.mapId && isMapCompleted(badge.mapId);
+      drawBadge(g, bx, by, earned ? badge : null);
+    });
   }
 
-  private createDialog(x: number, y: number, w: number): void {
-    drawPanel(this.add.graphics(), x, y, w, DIALOG_H);
-    this.dialogText = this.add
-      .text(x + 24, y + 22, '', { ...textStyle(8), wordWrap: { width: w - 72 } })
-      .setLineSpacing(10);
-    // Flecha roja que parpadea cuando el texto termina de escribirse
-    this.dialogArrow = this.add.graphics({ x: x + w - 32, y: y + DIALOG_H - 24 });
-    this.dialogArrow.fillStyle(0xe04040).fillTriangle(0, 0, 12, 0, 6, 7);
-    this.tweens.add({ targets: this.dialogArrow, y: this.dialogArrow.y + 3, duration: 350, yoyo: true, repeat: -1 });
+  /**
+   * Solo en desarrollo (npm run dev): interruptor en la cabecera para abrir todos los mapas sin
+   * tener que completarlos. No cambia los récords; al apagarlo vuelven los desbloqueos normales.
+   */
+  private addDevUnlockButton(): void {
+    const label = () => (loadDevUnlockAll() ? 'DEV: MAPAS\nABIERTOS' : 'DEV: ABRIR\nTODOS MAPAS');
+    const button = new Button(this, 16, 12, 136, 36, label(), () => {
+      saveDevUnlockAll(!loadDevUnlockAll());
+      button.setText(label()).setVariant(loadDevUnlockAll() ? 'green' : 'gray');
+    }, { variant: loadDevUnlockAll() ? 'green' : 'gray' });
+    button.setDepth(45);
   }
 
   // ---------------------------------------------------------------- estado
@@ -202,58 +245,32 @@ export class MainMenuScene extends Phaser.Scene {
     if (this.selected === index) return;
     this.selected = index;
     audio.play('click');
-    this.refresh(true);
+    this.refresh();
   }
 
   private move(step: number): void {
     this.select((this.selected + step + ITEMS.length) % ITEMS.length);
   }
 
-  private refresh(animate: boolean): void {
+  private refresh(): void {
     const item = ITEMS[this.selected];
     const y = this.rowY(this.selected);
     this.cursor.setPosition(LIST_X + 18, y);
     this.rowHighlight.clear().fillStyle(0xd8e8f8).fillRoundedRect(LIST_X + 8, y - ROW_H / 2 + 3, LIST_W - 16, ROW_H - 6, 6);
 
-    // Pokémon de muestra y plataforma de su tipo
-    const tower = TOWERS.find((t) => t.id === item.showcase) ?? TOWERS[0];
-    const sprite = tower.stages[0].sprite;
-    const look = battleSprite(sprite);
-    const scale = 110 / look.size;
-    this.pop?.stop();
-    this.showcase.setTexture(look.texture).setScale(scale).setFlipX(true);
-    this.showcase.play({ key: look.anim, startFrame: 0 });
-    const color = TYPE_COLORS[tower.type];
-    this.platform
-      .clear()
-      .fillStyle(darken(color, 35))
-      .fillEllipse(0, 0, 200, 56)
-      .fillStyle(color)
-      .fillEllipse(0, -3, 184, 44)
-      .fillStyle(0xffffff, 0.35)
-      .fillEllipse(-20, -8, 100, 14);
-    if (animate) {
-      this.pop = this.tweens.add({ targets: this.showcase, scale: { from: 0, to: scale }, duration: 220, ease: 'Back.easeOut' });
+    let text = item.scene || item.action ? item.description : `${item.description}\n¡Disponible próximamente!`;
+    // Recuerda la partida guardada al pasar por JUGAR
+    const saved = item.scene === 'MapSelect' ? loadSavedGame() : null;
+    if (saved) {
+      const where = `${mapById(saved.mapId).name} - ${DIFFICULTIES[saved.difficulty].label}`;
+      text = `Tienes una partida guardada en ${where} (oleada ${saved.waveIndex + 2}). ¡Elígela para continuar!`;
     }
-
-    this.typeText(item.scene || item.action ? item.description : `${item.description}\n¡Disponible próximamente!`);
+    this.typeText(text);
   }
 
-  /** Escribe el texto letra a letra, como los diálogos de los juegos */
+  /** Escribe en el cuadro de diálogo, letra a letra */
   private typeText(text: string): void {
-    this.typing?.remove();
-    this.dialogText.setText('');
-    this.dialogArrow.setVisible(false);
-    let shown = 0;
-    this.typing = this.time.addEvent({
-      delay: TYPE_SPEED,
-      repeat: text.length - 1,
-      callback: () => {
-        shown++;
-        this.dialogText.setText(text.slice(0, shown));
-        if (shown >= text.length) this.dialogArrow.setVisible(true);
-      },
-    });
+    this.dialog.say(text);
   }
 
   private open(item: MenuItem): void {
@@ -296,12 +313,11 @@ function drawMenuIcon(g: Phaser.GameObjects.Graphics, kind: IconKind, cx: number
       ball(cx + 7, cy + 4, 7, 0x3c64c8);
       ball(cx, cy - 6, 7, 0x38a058);
       break;
-    case 'user':
-      // Ficha de entrenador
-      g.fillStyle(0x303030).fillRoundedRect(cx - 12, cy - 9, 24, 18, 3);
-      g.fillStyle(0xf8d878).fillRoundedRect(cx - 11, cy - 8, 22, 16, 2);
-      g.fillStyle(0x3c64c8).fillCircle(cx - 5, cy - 1, 4).fillRect(cx - 9, cy + 3, 8, 4);
-      g.fillStyle(0x806030).fillRect(cx + 1, cy - 4, 8, 2).fillRect(cx + 1, cy, 6, 2);
+    case 'upgrades':
+      // Flecha amarilla hacia arriba
+      g.fillStyle(0x303030).fillTriangle(cx, cy - 13, cx - 12, cy + 1, cx + 12, cy + 1).fillRect(cx - 6, cy - 1, 12, 13);
+      g.fillStyle(0xf8c838).fillTriangle(cx, cy - 10, cx - 9, cy, cx + 9, cy).fillRect(cx - 4, cy - 1, 8, 11);
+      g.fillStyle(0xfff0a0).fillRect(cx - 2, cy - 6, 2, 14);
       break;
     case 'pokeshop':
       ball(cx - 3, cy + 1, 10);
@@ -337,4 +353,21 @@ function drawMenuIcon(g: Phaser.GameObjects.Graphics, kind: IconKind, cx: number
       g.fillStyle(0xf8f8f8).fillRect(cx - 7, cy + 2, 14, 8);
       break;
   }
+}
+
+/** Medalla de la ficha de entrenador (octógono con brillo); con `badge` null, hueco vacío */
+function drawBadge(g: Phaser.GameObjects.Graphics, cx: number, cy: number, badge: BadgeDef | null): void {
+  const r = 12;
+  const points = Array.from({ length: 8 }, (_, i) => {
+    const a = Math.PI / 8 + (i * Math.PI) / 4;
+    return new Phaser.Math.Vector2(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+  });
+  if (!badge) {
+    g.lineStyle(2, 0x5070a8).strokePoints(points, true);
+    return;
+  }
+  g.fillStyle(0x101828).fillPoints(points.map((p) => new Phaser.Math.Vector2(p.x + 1, p.y + 2)), true);
+  g.fillStyle(badge.color).fillPoints(points, true);
+  g.fillStyle(badge.shine).fillTriangle(cx - 6, cy - 6, cx + 2, cy - 8, cx - 8, cy + 2);
+  g.lineStyle(2, 0x101828).strokePoints(points, true);
 }

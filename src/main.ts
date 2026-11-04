@@ -5,10 +5,15 @@ import { loadFrontStrips, loadWalkSheets } from './data/sprites';
 import { loadTilesets } from './world/tileset';
 import { BootScene } from './scenes/BootScene';
 import { GameScene } from './scenes/GameScene';
+import { IntroScene } from './scenes/IntroScene';
+import { ItemShopScene } from './scenes/ItemShopScene';
+import { PokemonShopScene } from './scenes/PokemonShopScene';
+import { TeamScene } from './scenes/TeamScene';
 import { MainMenuScene } from './scenes/MainMenuScene';
 import { MapSelectScene } from './scenes/MapSelectScene';
 import { OptionsScene } from './scenes/OptionsScene';
 import { TitleScene } from './scenes/TitleScene';
+import { UpgradesScene } from './scenes/UpgradesScene';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -24,7 +29,7 @@ const config: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [BootScene, TitleScene, MainMenuScene, MapSelectScene, OptionsScene, GameScene],
+  scene: [BootScene, TitleScene, IntroScene, MainMenuScene, MapSelectScene, UpgradesScene, TeamScene, PokemonShopScene, ItemShopScene, OptionsScene, GameScene],
 };
 
 // Phaser dibuja el texto en canvas: la fuente tiene que estar cargada antes de arrancar.

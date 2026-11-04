@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { MAP_H, MAP_W, TILE } from '../config';
-import type { MapDef } from '../data/map';
+import { NPC_DIRS, type MapDef } from '../data/map';
+import { FLOWER_FRAMES, FLOWER_VARIANTS, flowerKey, npcKey } from './tileset';
 
 const BUTTERFLY_COLORS = [0xffffff, 0xfff080, 0xffb0d0];
 
@@ -47,6 +48,47 @@ export function addAmbient(scene: Phaser.Scene, def: MapDef): void {
 
   // Destellos en el agua
   for (const [col, row] of def.ponds) addGlints(scene, col * TILE, row * TILE);
+  addFlowers(scene, def);
+  addTrainers(scene, def);
+}
+
+/** Macizos de flores que se mecen con el viento, cada uno a su ritmo */
+function addFlowers(scene: Phaser.Scene, def: MapDef): void {
+  const key = (c: number, r: number) => flowerKey((c * 7 + r * 3) % FLOWER_VARIANTS);
+  for (const [c, r] of def.flowers ?? []) {
+    if (!scene.textures.exists(key(c, r))) continue;
+    const flower = scene.add.sprite(c * TILE, r * TILE, key(c, r), 0).setOrigin(0).setDepth(1);
+    const anim = `${key(c, r)}-sway`;
+    if (!scene.anims.exists(anim)) {
+      // Ida y vuelta, con una pausa en el fotograma de reposo
+      const frames = scene.anims.generateFrameNumbers(key(c, r), { start: 0, end: FLOWER_FRAMES - 1 });
+      scene.anims.create({ key: anim, frames, frameRate: 6, yoyo: true, repeat: -1, repeatDelay: 900 });
+    }
+    flower.play({ key: anim, delay: ((c * 5 + r * 3) % 8) * 150 });
+  }
+}
+
+/** Entrenadores quietos junto a la ruta que de vez en cuando miran a otro lado */
+function addTrainers(scene: Phaser.Scene, def: MapDef): void {
+  for (const npc of def.npcs ?? []) {
+    const key = npcKey(npc.sprite);
+    if (!scene.textures.exists(key)) continue;
+    const [c, r] = npc.at;
+    const frame = (dir: number) => dir * 4;
+    let dir = NPC_DIRS.indexOf(npc.dir ?? 'down');
+    const home = dir;
+    const trainer = scene.add
+      .sprite((c + 0.5) * TILE, (r + 1) * TILE - 2, key, frame(dir))
+      .setOrigin(0.5, 1)
+      .setDepth(10 + r / 100);
+    const look = () => {
+      // Casi siempre vuelve a mirar hacia donde miraba al principio
+      dir = dir !== home || Math.random() < 0.4 ? home : Phaser.Math.Between(0, NPC_DIRS.length - 1);
+      trainer.setFrame(frame(dir));
+      scene.time.delayedCall(Phaser.Math.Between(1800, 5000), look);
+    };
+    scene.time.delayedCall(Phaser.Math.Between(1000, 4000), look);
+  }
 }
 
 function addGlints(scene: Phaser.Scene, left: number, top: number): void {

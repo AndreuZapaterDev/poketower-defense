@@ -32,7 +32,7 @@ export class Button extends Phaser.GameObjects.Container {
   private readonly g: Phaser.GameObjects.Graphics;
   private readonly label: Phaser.GameObjects.Text;
   private readonly icon: Phaser.GameObjects.Image | null;
-  private readonly palette: Palette;
+  private palette: Palette;
   private readonly boxW: number;
   private readonly boxH: number;
   private enabled = true;
@@ -89,6 +89,13 @@ export class Button extends Phaser.GameObjects.Container {
 
   setIcon(texture: string): this {
     this.icon?.setTexture(texture);
+    return this;
+  }
+
+  /** Cambia el color del botón (p. ej. para interruptores que se encienden y apagan) */
+  setVariant(variant: ButtonVariant): this {
+    this.palette = PALETTES[variant];
+    this.draw();
     return this;
   }
 

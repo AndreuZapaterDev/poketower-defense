@@ -16,6 +16,8 @@ import {
   walkSheets,
 } from '../data/sprites';
 import { difficultyById } from '../data/map';
+import { ITEMS, itemKey, itemPath } from '../data/items';
+import { INTRO_IMAGES } from './IntroScene';
 import { fitCamera } from '../ui/theme';
 import { buildTextures } from '../world/textures';
 import type { GameSceneData } from './GameScene';
@@ -35,6 +37,8 @@ export class BootScene extends Phaser.Scene {
     for (const key of allSpriteKeys()) {
       this.load.spritesheet(iconKey(key), iconPath(key), { frameWidth: ICON_FRAME, frameHeight: ICON_FRAME });
     }
+    for (const item of ITEMS) this.load.image(itemKey(item), itemPath(item));
+    for (const [key, path] of Object.entries(INTRO_IMAGES)) this.load.image(key, path);
   }
 
   create(): void {
@@ -49,10 +53,12 @@ export class BootScene extends Phaser.Scene {
     this.registerFrontStrips();
     this.registerWalkSheets();
     buildTextures(this);
-    // Atajo de desarrollo: http://localhost:9000/#game (o #game=gimnasioplateada:hard) salta los menús
+    // Atajo de desarrollo: http://localhost:9000/#game (o #game=gimnasioplateada:hard, o con :resume para seguir la partida guardada) salta los menús
     const [hash, args = ''] = window.location.hash.split('=');
-    const [mapId, difficulty] = args.split(':');
-    if (hash === '#game') this.scene.start('Game', { mapId, difficulty: difficultyById(difficulty) } satisfies GameSceneData);
+    const [mapId, difficulty, extra] = args.split(':');
+    // y #scene=MapSelect (o cualquier otra escena) abre ese menú directamente
+    if (hash === '#game') this.scene.start('Game', { mapId, difficulty: difficultyById(difficulty), resume: extra === 'resume' } satisfies GameSceneData);
+    else if (hash === '#scene' && this.scene.get(args)) this.scene.start(args);
     else this.scene.start('Title');
   }
 

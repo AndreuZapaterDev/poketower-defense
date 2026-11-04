@@ -56,13 +56,54 @@ export function drawPanel(g: Phaser.GameObjects.Graphics, x: number, y: number, 
 export const MENU_HEADER_H = 64;
 export const MENU_FOOTER_H = 40;
 
-/** Fondo de los menús: cielo degradado con siluetas de Poké Ball que se desplazan en diagonal */
+/**
+ * Fondo de los menús: cielo degradado con siluetas de Poké Ball que se desplazan en diagonal y,
+ * abajo, dos filas de pinos en silueta, como el bosque de las rutas
+ */
 export function drawMenuBackground(scene: Phaser.Scene): void {
   const W = GAME_W;
   const H = GAME_H;
   scene.add.graphics().fillGradientStyle(0x68a8e8, 0x68a8e8, 0xc8e4f8, 0xc8e4f8, 1).fillRect(0, 0, W, H);
   const pattern = scene.add.tileSprite(0, 0, W, H, 'menu-pattern').setOrigin(0).setAlpha(0.22);
   scene.tweens.add({ targets: pattern, tilePositionX: 64, tilePositionY: 64, duration: 5000, repeat: -1 });
+  const ground = H - MENU_FOOTER_H;
+  const g = scene.add.graphics();
+  drawPineRow(g, W, ground - 18, 0x88b8e0, 30, 52, 'menu-back');
+  drawPineRow(g, W, ground, 0x70a0d0, 38, 70, 'menu-front');
+}
+
+/**
+ * Fila de pinos en silueta (triángulos escalonados) apoyados en `baseY`, de `minH` a `maxH` px
+ * de alto; la semilla hace que salgan siempre iguales
+ */
+export function drawPineRow(
+  g: Phaser.GameObjects.Graphics,
+  width: number,
+  baseY: number,
+  color: number,
+  minH: number,
+  maxH: number,
+  seed: string,
+): void {
+  const rng = new Phaser.Math.RandomDataGenerator([seed]);
+  g.fillStyle(color).fillRect(0, baseY - 6, width, 400);
+  for (let x = -10; x < width + 30; x += rng.between(18, 30)) {
+    const h = rng.between(minH, maxH);
+    const w = h * 0.55;
+    // Tres pisos de ramas, cada uno más estrecho
+    for (let i = 0; i < 3; i++) {
+      const top = baseY - h + (i * h) / 4;
+      const half = (w / 2) * (0.6 + i * 0.2);
+      g.fillTriangle(x, top, x - half, top + h / 2.2, x + half, top + h / 2.2);
+    }
+  }
+}
+
+/** Etiqueta de sección: texto rojo pequeño seguido de una línea hasta `x + w` */
+export function addSectionLabel(scene: Phaser.Scene, x: number, y: number, w: number, text: string) {
+  const label = scene.add.text(x, y, text, textStyle(8, '#d03030', null)).setOrigin(0, 0.5);
+  const line = scene.add.graphics().fillStyle(0xe8c0c0).fillRect(x + label.width + 8, y - 1, w - label.width - 8, 2);
+  return [label, line] as const;
 }
 
 /** Franja roja superior con el título; con `onBack`, añade un botón para volver */

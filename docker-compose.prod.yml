@@ -1,0 +1,11 @@
+# Versión de producción: docker compose -f docker-compose.prod.yml up --build -d
+# El juego queda en http://localhost:8080
+services:
+  game:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: poketower
+    ports:
+      - "8080:80"
+    restart: unless-stopped

@@ -1,8 +1,10 @@
 import Phaser from 'phaser';
 import { SCALE, SELL_RATIO, TILE } from '../config';
 import { battleSprite, feetAnchor, type BattleSprite } from '../data/sprites';
-import type { TowerDef, TowerStage } from '../data/towers';
+import { priceOf, type TowerDef, type TowerStage } from '../data/towers';
 import { TYPE_COLORS } from '../data/types';
+import { TARGET_MODES, type TargetMode } from '../data/targeting';
+import { canLearn, skillEffects, skillPointsEarned, type SkillEffects, type SkillId } from '../data/skills';
 import { darken } from '../ui/theme';
 
 /** Altura de los pies respecto al centro de la casilla (sobre la plataforma) */
@@ -15,14 +17,7 @@ const MAX_LEVEL = 100;
 /** Ritmo con que se alternan las dos siluetas al evolucionar (ms), cada vez más rápido */
 const EVOLUTION_FLICKER = [260, 220, 190, 160, 130, 110, 90, 75, 60, 50, 40, 40];
 
-export type TargetMode = 'first' | 'last' | 'strong' | 'close';
-export const TARGET_MODES: TargetMode[] = ['first', 'last', 'strong', 'close'];
-export const TARGET_LABELS: Record<TargetMode, string> = {
-  first: 'PRIMERO',
-  last: 'ULTIMO',
-  strong: 'MAS FUERTE',
-  close: 'MAS CERCANO',
-};
+export { TARGET_LABELS, TARGET_MODES, type TargetMode } from '../data/targeting';
 
 /** Escala para que un Pokémon de la fase `stage` no supere su tamaño máximo (sin agrandar los pequeños) */
 export function towerScale(sprite: string, stage: number): number {
@@ -43,7 +38,17 @@ export class Tower extends Phaser.GameObjects.Container {
   /** Dinero total invertido (compra + evoluciones) */
   spent: number;
   kills = 0;
+  /** Vida total que ha quitado a los Pokémon salvajes (sin contar lo que sobra al debilitarlos) */
+  damageDealt = 0;
   targetMode: TargetMode = 'first';
+  /** Habilidades aprendidas (ver data/skills.ts) */
+  readonly skills = new Set<SkillId>();
+  /** Niveles subidos con experiencia (los de evolucionar no cuentan): dan puntos de habilidad */
+  expLevels = 0;
+  /** Daño extra por los objetos de la cuenta (las Tablas de su tipo); 1 = sin objetos */
+  itemMult = 1;
+  /** Efectos de las habilidades, recalculados al aprender una */
+  skillFx: SkillEffects = skillEffects(new Set());
   evolving = false;
   private released = false;
 
@@ -56,7 +61,7 @@ export class Tower extends Phaser.GameObjects.Container {
     this.def = def;
     this.col = col;
     this.row = row;
-    this.spent = def.stages[0].cost;
+    this.spent = priceOf(def.stages[0]);
     this.level = def.stages[0].level;
 
     // Plataforma de combate del color del tipo
@@ -84,9 +89,33 @@ export class Tower extends Phaser.GameObjects.Container {
     return this.def.stages[this.stage];
   }
 
-  /** Daño real: el de su fase más un bonus por los niveles ganados con experiencia */
+  /** Daño real: el de su fase, más un bonus por los niveles ganados con experiencia y sus habilidades */
   get damage(): number {
-    return Math.round(this.stats.damage * (1 + LEVEL_BONUS * Math.max(0, this.level - this.stats.level)));
+    const levelBonus = 1 + LEVEL_BONUS * Math.max(0, this.level - this.stats.level);
+    return Math.round(this.stats.damage * levelBonus * this.skillFx.damageMult * this.itemMult);
+  }
+
+  /** Alcance real en píxeles, con las habilidades de ALCANCE */
+  get range(): number {
+    return Math.round(this.stats.range * this.skillFx.rangeMult);
+  }
+
+  /** Milisegundos entre ataques, con las habilidades de RAPIDEZ */
+  get fireInterval(): number {
+    return Math.round(this.stats.fireRate * this.skillFx.intervalMult);
+  }
+
+  /** Puntos de habilidad sin gastar */
+  get freeSkillPoints(): number {
+    return Math.max(0, skillPointsEarned(this.stage, this.expLevels) - this.skills.size);
+  }
+
+  /** Aprende una habilidad si puede. Devuelve si la ha aprendido */
+  learn(id: SkillId): boolean {
+    if (!canLearn(id, this.skills, this.freeSkillPoints, this.def.ability)) return false;
+    this.skills.add(id);
+    this.skillFx = skillEffects(this.skills);
+    return true;
   }
 
   get expToNext(): number {
@@ -98,7 +127,7 @@ export class Tower extends Phaser.GameObjects.Container {
   }
 
   get evolveCost(): number {
-    return this.canEvolve ? this.def.stages[this.stage + 1].cost : 0;
+    return this.canEvolve ? priceOf(this.def.stages[this.stage + 1]) : 0;
   }
 
   get sellValue(): number {
@@ -143,6 +172,7 @@ export class Tower extends Phaser.GameObjects.Container {
       this.level++;
       gained++;
     }
+    this.expLevels += gained;
     if (this.level >= MAX_LEVEL) this.exp = 0;
     if (gained) {
       this.scene.tweens.add({ targets: this.sprite, y: this.anchor.y - 8, duration: 120, yoyo: true });
@@ -246,6 +276,32 @@ export class Tower extends Phaser.GameObjects.Container {
       onEvolved?.();
     });
     return true;
+  }
+
+  /** Deja la torre como estaba en una partida guardada (sin animación de evolución) */
+  restore(saved: {
+    stage: number;
+    level: number;
+    exp: number;
+    kills: number;
+    damage: number;
+    target: TargetMode;
+    spent: number;
+    expLevels: number;
+    skills: SkillId[];
+  }): void {
+    this.stage = Math.min(saved.stage, this.def.stages.length - 1);
+    this.level = Math.max(saved.level, this.stats.level);
+    this.exp = saved.exp;
+    this.kills = saved.kills;
+    this.damageDealt = saved.damage;
+    this.targetMode = saved.target;
+    this.spent = saved.spent;
+    this.expLevels = saved.expLevels;
+    this.skills.clear();
+    for (const id of saved.skills) this.skills.add(id);
+    this.skillFx = skillEffects(this.skills);
+    this.showStage();
   }
 
   /** Pone la textura, animación y escala de la fase actual */

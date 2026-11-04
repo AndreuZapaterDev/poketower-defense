@@ -1,9 +1,10 @@
 import Phaser from 'phaser';
 import { MAP_H, MAP_W } from '../config';
+import { loadTextSpeed } from '../save';
+import { LETTER_DELAY } from './DialogBox';
 import { drawPanel, textStyle } from './theme';
 
 const MAX_QUEUE = 3;
-const CHAR_DELAY = 22;
 const HOLD_TIME = 1600;
 // Si hay mensajes esperando se escribe más rápido y se pasa antes, para no ir con retraso
 const RUSH_CHAR_DELAY = 8;
@@ -52,7 +53,8 @@ export class MessageBox {
     let shown = 0;
     const rush = () => this.queue.length > 0;
     this.scene.time.addEvent({
-      delay: rush() ? RUSH_CHAR_DELAY : CHAR_DELAY,
+      // Velocidad elegida en OPCIONES (VELOC. TEXTO); si hay mensajes esperando, más deprisa
+      delay: rush() ? Math.min(RUSH_CHAR_DELAY, LETTER_DELAY[loadTextSpeed()]) : LETTER_DELAY[loadTextSpeed()],
       repeat: message.length - 1,
       callback: () => {
         shown++;

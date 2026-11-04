@@ -188,6 +188,7 @@ export class Enemy extends Phaser.GameObjects.Container {
 
   takeDamage(amount: number, source: Tower | null, flash = true): void {
     if (!this.alive || amount <= 0) return;
+    if (source) source.damageDealt += Math.min(amount, this.hp);
     this.hp -= amount;
     if (source) this.lastAttacker = source;
     if (flash) {
