@@ -1,11 +1,14 @@
 import Phaser from 'phaser';
 import { MAP_H, MAP_W, TILE } from '../config';
-import type { Tile } from '../data/map';
+import type { MapDef } from '../data/map';
 
 const BUTTERFLY_COLORS = [0xffffff, 0xfff080, 0xffb0d0];
 
 /** Vida decorativa del mapa: sombras de nubes, mariposas y destellos en los estanques */
-export function addAmbient(scene: Phaser.Scene, ponds: Tile[]): void {
+export function addAmbient(scene: Phaser.Scene, def: MapDef): void {
+  // Dentro de un gimnasio no hay nubes ni mariposas
+  if (def.gym) return;
+
   // Sombras de nubes que cruzan el mapa despacio
   for (let i = 0; i < 2; i++) {
     const cloud = scene.add.image(-250, 0, 'cloudshadow').setAlpha(0.07).setDepth(60);
@@ -43,7 +46,7 @@ export function addAmbient(scene: Phaser.Scene, ponds: Tile[]): void {
   });
 
   // Destellos en el agua
-  for (const [col, row] of ponds) addGlints(scene, col * TILE, row * TILE);
+  for (const [col, row] of def.ponds) addGlints(scene, col * TILE, row * TILE);
 }
 
 function addGlints(scene: Phaser.Scene, left: number, top: number): void {

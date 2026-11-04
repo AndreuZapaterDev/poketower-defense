@@ -99,11 +99,9 @@ export function buildTextures(scene: Phaser.Scene): void {
   });
   // Los mapas con tileset se dibujan por código si el tileset no se ha podido cargar
   const tiled = MAPS.filter((def) => def.tileset).map((def) => ({ def, key: mapTextureKey(def.id) }));
-  const tilesetReady = buildTilesetTextures(scene, tiled);
-  for (const def of MAPS) {
-    if (def.tileset && tilesetReady) continue;
-    make(scene, mapTextureKey(def.id), MAP_W, MAP_H, (g) => drawMap(g, def));
-  }
+  buildTilesetTextures(scene, tiled);
+  // make() se salta las texturas que ya existen
+  for (const def of MAPS) make(scene, mapTextureKey(def.id), MAP_W, MAP_H, (g) => drawMap(g, def));
 }
 
 function drawPokeball(g: G): void {
@@ -142,7 +140,7 @@ function drawMap(g: G, def: MapDef): void {
   for (const [c, r] of def.tallGrass) drawTallGrass(g, c * TILE, r * TILE, true);
   for (const pond of def.ponds) drawPond(g, pond);
   for (const [c, r] of def.trees) drawTree(g, c * TILE, r * TILE);
-  drawSign(g, def.sign[0] * TILE, def.sign[1] * TILE);
+  if (def.sign) drawSign(g, def.sign[0] * TILE, def.sign[1] * TILE);
   if (map.pokecenter) drawPokeCenter(g, map.pokecenter);
 }
 

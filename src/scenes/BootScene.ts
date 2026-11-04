@@ -49,7 +49,7 @@ export class BootScene extends Phaser.Scene {
     this.registerFrontStrips();
     this.registerWalkSheets();
     buildTextures(this);
-    // Atajo de desarrollo: http://localhost:9000/#game (o #game=bosqueverde:hard) salta los menús
+    // Atajo de desarrollo: http://localhost:9000/#game (o #game=gimnasioplateada:hard) salta los menús
     const [hash, args = ''] = window.location.hash.split('=');
     const [mapId, difficulty] = args.split(':');
     if (hash === '#game') this.scene.start('Game', { mapId, difficulty: difficultyById(difficulty) } satisfies GameSceneData);

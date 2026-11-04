@@ -2,7 +2,7 @@ import '@fontsource/press-start-2p';
 import Phaser from 'phaser';
 import { GAME_H, GAME_W, RENDER_ZOOM } from './config';
 import { loadFrontStrips, loadWalkSheets } from './data/sprites';
-import { loadOutsideTileset } from './world/tileset';
+import { loadTilesets } from './world/tileset';
 import { BootScene } from './scenes/BootScene';
 import { GameScene } from './scenes/GameScene';
 import { MainMenuScene } from './scenes/MainMenuScene';
@@ -34,7 +34,7 @@ Promise.all([
   document.fonts.load('16px "Press Start 2P"').catch(() => undefined),
   loadFrontStrips(),
   loadWalkSheets(),
-  loadOutsideTileset(),
+  loadTilesets(),
 ])
   .then(() => {
     const game = new Phaser.Game(config);

@@ -27,11 +27,21 @@ export interface MapDef {
   name: string;
   /**
    * Recorrido en coordenadas de casilla [columna, fila]. Empieza fuera del mapa y termina en la
-   * puerta del Centro Pokémon (o fuera del mapa, con `goal: 'exit'`). Los tramos deben ser rectos.
+   * puerta del Centro Pokémon (fuera del mapa con `goal: 'exit'`, o delante del líder con
+   * `goal: 'leader'`). Los tramos deben ser rectos.
    */
   path: Tile[];
-  /** Meta de los enemigos: el Centro Pokémon (por defecto) o la salida del mapa, sin edificio */
-  goal?: 'pokecenter' | 'exit';
+  /**
+   * Meta de los enemigos: el Centro Pokémon (por defecto), la salida del mapa sin edificio, o el
+   * líder del gimnasio, subido a una roca sobre una plataforma de escalones de 7x3 casillas
+   * justo encima del final del camino
+   */
+  goal?: 'pokecenter' | 'exit' | 'leader';
+  /**
+   * Imagen del líder del gimnasio, con `goal: 'leader'`: hoja de 4x4 fotogramas de 32x48 px
+   * (una fila por dirección); se dibuja el primero, mirando hacia abajo
+   */
+  leader?: string;
   /** Vallas de madera (solo con tileset); las casillas seguidas en una fila forman una valla */
   fences?: Tile[];
   /** Casilla de hierba alta por la que aparecen los Pokémon salvajes */
@@ -41,7 +51,7 @@ export interface MapDef {
   ponds: Tile[];
   tallGrass: Tile[];
   /** Cartel de madera con el nombre de la ruta */
-  sign: Tile;
+  sign?: Tile;
   /**
    * Se dibuja con el tileset de exteriores (ver world/tileset.ts). Los árboles son pinos
    * que tapan también la casilla de encima, y el Centro Pokémon ocupa 5x5 casillas.
@@ -53,16 +63,33 @@ export interface MapDef {
   rocks?: Tile[];
   bushes?: Tile[];
   /**
-   * Pinos grandes del tileset del bosque (solo con tileset): esquina superior izquierda de
-   * cada uno. Ocupan 2x3 casillas y no se puede construir en ninguna de ellas.
+   * Interior de gimnasio (ver world/tileset.ts): suelo de arena, camino de tablones de madera,
+   * arriba la pared y una alfombra (GYM_TOP_ROWS filas en las que no se puede construir) y la
+   * alfombrilla de la entrada en la primera casilla del camino, que tapa un poco la de cada lado
    */
-  pines?: Tile[];
-  /** Esquina superior izquierda de cada árbol redondo de 2x2 del tileset del bosque */
-  bigTrees?: Tile[];
+  gym?: boolean;
+  /** Estatuas del gimnasio (solo con tileset): ocupan su casilla y la de encima */
+  statues?: Tile[];
+  /** Zonas de suelo de madera del gimnasio, además del camino; se puede construir encima */
+  wood?: Tile[];
+  /** Columnas de la alfombra del fondo con un adorno */
+  carpetDecor?: number[];
+  /**
+   * Primera y última columna del interior del gimnasio: a cada lado va una columna de pared
+   * lateral y, más allá (en pantallas anchas), pared maciza. No se puede construir fuera.
+   */
+  room?: [left: number, right: number];
 }
 
 /** Columnas para las que están diseñados los mapas; en pantallas anchas el mapa tiene más (ver COLS) */
 const DESIGN_COLS = 24;
+
+/** Filas de pared en lo alto de los mapas de gimnasio */
+export const GYM_WALL_ROWS = 2;
+/** Filas de alfombra bajo la pared del gimnasio */
+export const GYM_CARPET_ROWS = 2;
+/** Filas de arriba de los gimnasios en las que no se puede construir: pared y alfombra */
+export const GYM_TOP_ROWS = GYM_WALL_ROWS + GYM_CARPET_ROWS;
 
 /** Bosque de pinos al tresbolillo que llena las columnas de más, a la derecha del mapa */
 function forestMargin(): Tile[] {
@@ -119,84 +146,52 @@ export const MAPS: MapDef[] = [
     rocks: [[1, 7], [15, 2], [23, 12], [10, 15]],
     bushes: [[4, 1], [12, 2], [19, 15], [3, 14]],
   },
-  bosqueVerde(),
+  gimnasioPlateada(),
 ];
 
 /**
- * Bosque Verde: se entra por abajo y el camino serpentea entre los árboles hasta la salida del
- * bosque, arriba a la derecha, entre dos vallas. Solo se construye en los claros que deja el
- * bosque junto al camino; su anchura cambia poco a poco para que los bordes no sean rectos.
+ * Gimnasio de Ciudad Plateada (tipo roca), adaptado del original: una sala centrada en el mapa,
+ * con paredes a los lados, suelo de arena con rocas grises, la alfombra del fondo bajo la pared
+ * y Brock en su roca, en el centro de una plataforma de escalones. Se entra por la alfombrilla
+ * de abajo y se sube por el pasillo central, entre dos estatuas. Como en el original, el suelo
+ * alterna franjas de tablones y de arena: el camino recorre las franjas en zigzag (para que haya
+ * recorrido donde atacar) y llega a Brock de frente, por el escalón de la plataforma; nunca pasa
+ * por detrás de él. La decoración es simétrica respecto a la columna central.
  */
-function bosqueVerde(): MapDef {
-  const path: Tile[] = [
-    [2, ROWS],
-    [2, 14],
-    [8, 14],
-    [8, 9],
-    [4, 9],
-    [4, 3],
-    [12, 3],
-    [12, 13],
-    [17, 13],
-    [17, 6],
-    [21, 6],
-    [21, -1],
-  ];
-  const sign: Tile = [19, 4];
-  const fences: Tile[] = [[18, 2], [19, 2], [20, 2], [22, 2], [23, 2], [24, 2]];
-  // Zonas de hierba alta en los claros, siempre a una casilla o más del camino
-  const tallGrass: Tile[] = [
-    [5, 1], [6, 1], [7, 1], [8, 1],
-    [14, 8], [15, 8], [14, 9], [15, 9],
-    [8, 5], [8, 6], [8, 7],
-    [19, 10], [19, 11], [19, 12],
-    [0, 12], [1, 12], [0, 13],
-    [10, 15], [11, 15], [10, 16], [11, 16],
-  ];
-  const bushes: Tile[] = [[4, 1], [22, 8], [6, 11]];
-  const rocks: Tile[] = [[5, 12], [13, 1], [6, 15]];
-  // Árboles en los claros del centro: pinos a los lados de la hierba del primer bucle, otro
-  // en la franja central y en la esquina de arriba, y árboles redondos en los huecos
-  const centralPines: Tile[] = [[6, 5], [9, 5], [14, 4], [10, 0]];
-  const bigTrees: Tile[] = [[14, 11], [18, 8], [10, 10]];
-  const decor = new Set<string>(
-    [
-      ...bigTrees.flatMap(([c, r]) => rect(c, r, 2, 2)),
-      sign,
-      ...fences,
-      ...tallGrass,
-      ...bushes,
-      ...rocks,
-    ].map(([c, r]) => tileKey(c, r)),
-  );
-  // Distancia mínima al camino a partir de la cual hay bosque: entre 2 y 4 casillas,
-  // variando suavemente (claros más anchos o más estrechos según la zona)
-  const clearance = (c: number, r: number) => {
-    const wave = Math.sin(c * 0.7 + r * 0.3) * 0.5 + Math.sin(r * 0.9 - c * 0.4 + 1.7) * 0.5;
-    return wave > 0.55 ? 4 : wave < -0.55 ? 2 : 3;
-  };
-  const zone = forestAround(path, clearance).filter(([c, r]) => !decor.has(tileKey(c, r)));
-  // Ni los pinos ni sus copas pueden tapar el camino, los decorados ni las casillas de al lado
-  // del camino (sus bordes las invaden un poco)
-  const keep = new Set(decor);
-  for (const [c, r] of segmentTiles(path)) for (const [a, b] of rect(c - 1, r - 1, 3, 3)) keep.add(tileKey(a, b));
-  const forest = placePines(zone, centralPines, keep);
+function gimnasioPlateada(): MapDef {
+  // Interior de 21 columnas; con las dos paredes laterales, 23, centradas en el mapa
+  const inner = 21;
+  const left = Math.floor((COLS - inner - 2) / 2) + 1;
+  const cx = left + (inner - 1) / 2;
+  /** Casilla a `d` columnas del centro */
+  const at = (d: number, r: number): Tile => [cx + d, r];
+  /** La casilla a `d` columnas del centro y su simétrica */
+  const pair = (d: number, r: number): Tile[] => [at(-d, r), at(d, r)];
   return {
-    id: 'bosqueverde',
-    name: 'BOSQUE VERDE',
-    path,
-    goal: 'exit',
-    spawn: [2, ROWS - 1],
+    id: 'gimnasioplateada',
+    name: 'GIMNASIO PLATEADA',
+    // Franjas de tablones en las filas 15, 13 y 11, unidas por los extremos; de la última se
+    // sube recto por el centro hasta la plataforma
+    path: [at(0, ROWS), at(0, 15), at(9, 15), at(9, 13), at(-9, 13), at(-9, 11), at(0, 11), at(0, 8)],
+    goal: 'leader',
+    leader: 'assets/characters/gym/trainer_LEADER_Brock.png',
+    spawn: at(0, ROWS - 1),
     trees: [],
-    pines: forest.pines,
-    bigTrees,
     ponds: [],
-    tallGrass,
-    sign,
+    tallGrass: [],
     tileset: true,
-    bushes: [...bushes, ...forest.fillers],
-    rocks,
-    fences,
+    gym: true,
+    room: [left, left + inner - 1],
+    statues: pair(2, ROWS - 1),
+    // Esquinas escalonadas de madera arriba y suelo de madera junto a la entrada
+    wood: [...pair(10, 4), ...pair(9, 4), ...pair(8, 4), ...pair(10, 5), ...pair(9, 5), ...pair(10, 6),
+      ...rect(left, ROWS - 1, inner, 1)],
+    carpetDecor: pair(4, 0).concat(pair(2, 0)).map(([c]) => c),
+    // Alrededor de la plataforma, como en el original; y alguna en las franjas de arena
+    rocks: [
+      ...pair(2, 4), ...pair(5, 6), ...pair(7, 8), ...pair(3, 8),
+      ...pair(10, 10), ...pair(10, 14), ...pair(5, 16), ...pair(9, 16),
+    ],
   };
 }
 
@@ -222,51 +217,6 @@ function segmentTiles(path: Tile[]): Tile[] {
   return tiles;
 }
 
-/**
- * Reparte pinos grandes (2x3 casillas) por una zona de bosque, sin que ninguno se monte encima
- * de otro ni de nada: cada pino ocupa sus 6 casillas en exclusiva. `fixed` son pinos ya
- * colocados a mano y `keep` las casillas que nunca se pueden tapar (camino y decorados).
- *  1. Pinos enteros dentro de la zona, primero al tresbolillo y luego en cualquier hueco.
- *  2. Pinos con la copa (la fila de arriba) asomando fuera de la zona, sobre el claro.
- *  3. Arbustos en las casillas de la zona que hayan quedado sueltas.
- * Fuera del mapa cuenta como bosque, para que los pinos del borde salgan cortados.
- */
-function placePines(zone: Tile[], fixed: Tile[], keep: Set<string>): { pines: Tile[]; fillers: Tile[] } {
-  const inZone = new Set(zone.map(([c, r]) => tileKey(c, r)));
-  const inMap = (c: number, r: number) => c >= 0 && c < COLS && r >= 0 && r < ROWS;
-  const inForest = (c: number, r: number) => inZone.has(tileKey(c, r)) || !inMap(c, r);
-  const used = new Set(fixed.flatMap(([c, r]) => rect(c, r, 2, 3)).map(([c, r]) => tileKey(c, r)));
-  const free = (c: number, r: number) => !used.has(tileKey(c, r)) && !keep.has(tileKey(c, r));
-  const pines: Tile[] = [...fixed];
-  const place = (x: number, top: number, crownOutside: boolean) => {
-    const crown = rect(x, top, 2, 1);
-    const lower = rect(x, top + 1, 2, 2);
-    if (!lower.every(([c, r]) => inForest(c, r) && free(c, r))) return;
-    if (!crown.every(([c, r]) => free(c, r) && (crownOutside || inForest(c, r)))) return;
-    for (const [c, r] of [...crown, ...lower]) used.add(tileKey(c, r));
-    pines.push([x, top]);
-  };
-  for (let j = -1; 3 * j < ROWS + 3; j++) {
-    for (let x = -2 + (j & 1); x < COLS + 1; x += 2) place(x, 3 * j - 1, false);
-  }
-  for (let top = -2; top < ROWS + 1; top++) for (let x = -1; x < COLS + 1; x++) place(x, top, false);
-  for (let top = -2; top < ROWS + 1; top++) for (let x = -1; x < COLS + 1; x++) place(x, top, true);
-  const fillers = zone.filter(([c, r]) => inMap(c, r) && free(c, r));
-  return { pines, fillers };
-}
-
-/** Todas las casillas del mapa a `minDist(c, r)` casillas o más del camino */
-function forestAround(path: Tile[], minDist: (c: number, r: number) => number): Tile[] {
-  const tiles = segmentTiles(path);
-  const near = (c: number, r: number) =>
-    tiles.some(([pc, pr]) => Math.max(Math.abs(pc - c), Math.abs(pr - r)) < minDist(c, r));
-  const forest: Tile[] = [];
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS; c++) if (!near(c, r)) forest.push([c, r]);
-  }
-  return forest;
-}
-
 export const mapById = (id: string | undefined) => MAPS.find((m) => m.id === id) ?? MAPS[0];
 
 // Funciones (no constantes) para poder usarlas al construir MAPS, que va antes en el fichero
@@ -289,8 +239,12 @@ export class RouteMap {
   readonly pathTiles = new Set<string>();
   /** Casillas por las que pasan los enemigos (el centro del camino), en orden */
   readonly centerline: Tile[] = [];
-  /** Rectángulo del Centro Pokémon, o null si el mapa termina en una salida */
+  /** Rectángulo del Centro Pokémon, o null si la meta es otra */
   readonly pokecenter: { x: number; y: number; w: number; h: number } | null;
+  /** Rectángulo del escenario del líder del gimnasio, con `goal: 'leader'` */
+  readonly leaderStage: { x: number; y: number; w: number; h: number } | null;
+  /** Casilla de la entrada de los gimnasios (la primera del camino dentro del mapa) */
+  readonly door: Tile | null;
   private readonly blocked: Set<string>;
 
   constructor(def: MapDef) {
@@ -316,22 +270,37 @@ export class RouteMap {
     }
 
     const [endCol, endRow] = def.path[def.path.length - 1];
-    const pokecenterTiles: Tile[] = [];
+    const goalTiles: Tile[] = [];
+    this.leaderStage = null;
     if (def.goal === 'exit') {
       this.pokecenter = null;
+    } else if (def.goal === 'leader') {
+      // Plataforma de 7x3 casillas centrada sobre la última casilla del camino
+      this.pokecenter = null;
+      this.leaderStage = { x: (endCol - 3) * TILE, y: (endRow - 3) * TILE, w: TILE * 7, h: TILE * 3 };
+      goalTiles.push(...rect(endCol - 3, endRow - 3, 7, 3));
     } else if (def.tileset) {
       // El del tileset ocupa 5x5 casillas, con la puerta en la última casilla del camino
       this.pokecenter = { x: (endCol - 2) * TILE, y: (endRow - 4) * TILE, w: TILE * 5, h: TILE * 5 };
       for (let r = endRow - 4; r <= endRow; r++) {
-        for (let c = endCol - 2; c <= endCol + 2; c++) pokecenterTiles.push([c, r]);
+        for (let c = endCol - 2; c <= endCol + 2; c++) goalTiles.push([c, r]);
       }
     } else {
       // El Centro Pokémon ocupa 3x3 casillas con la puerta sobre el final del camino
       this.pokecenter = { x: (endCol - 1) * TILE, y: endRow * TILE + 12 - TILE * 3, w: TILE * 3, h: TILE * 3 };
       for (let r = endRow - 3; r < endRow; r++) {
-        for (let c = endCol - 1; c <= endCol + 1; c++) pokecenterTiles.push([c, r]);
+        for (let c = endCol - 1; c <= endCol + 1; c++) goalTiles.push([c, r]);
       }
     }
+    // Fuera del interior del gimnasio todo es pared
+    const outside: Tile[] = [];
+    if (def.room) {
+      const [left, right] = def.room;
+      outside.push(...rect(0, 0, left, ROWS), ...rect(right + 1, 0, COLS - right - 1, ROWS));
+    }
+    // La alfombrilla de la entrada del gimnasio tapa un poco la casilla de cada lado
+    this.door = def.gym ? (this.centerline.find(([c, r]) => c >= 0 && c < COLS && r >= 0 && r < ROWS) ?? null) : null;
+    const doorSides: Tile[] = this.door ? [[this.door[0] - 1, this.door[1]], [this.door[0] + 1, this.door[1]]] : [];
     // Los pinos del tileset tapan con la copa la casilla de encima
     const crowns: Tile[] = def.tileset ? def.trees.map(([c, r]): Tile => [c, r - 1]) : [];
 
@@ -341,13 +310,15 @@ export class RouteMap {
         ...crowns,
         ...def.ponds.flatMap(pondTiles),
         ...def.tallGrass,
-        def.sign,
+        ...(def.sign ? [def.sign] : []),
         ...(def.rocks ?? []),
         ...(def.bushes ?? []),
-        ...(def.pines ?? []).flatMap(([c, r]) => rect(c, r, 2, 3)),
-        ...(def.bigTrees ?? []).flatMap(([c, r]) => rect(c, r, 2, 2)),
+        ...(def.statues ?? []).flatMap(([c, r]) => rect(c, r - 1, 1, 2)),
+        ...(def.gym ? rect(0, 0, COLS, GYM_TOP_ROWS) : []),
+        ...outside,
+        ...doorSides,
         ...(def.fences ?? []),
-        ...pokecenterTiles,
+        ...goalTiles,
       ].map(([c, r]) => tileKey(c, r)),
     );
   }

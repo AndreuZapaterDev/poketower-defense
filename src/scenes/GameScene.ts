@@ -119,7 +119,7 @@ export class GameScene extends Phaser.Scene {
 
     this.cameras.main.fadeIn(400, 0, 0, 0);
     this.add.image(0, 0, mapTextureKey(this.map.def.id)).setOrigin(0).setDepth(0);
-    addAmbient(this, this.map.def.ponds);
+    addAmbient(this, this.map.def);
 
     this.rangeGfx = this.add.graphics().setDepth(5);
     this.selectionRing = this.add.graphics().setDepth(9).setVisible(false);
